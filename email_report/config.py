@@ -115,8 +115,9 @@ class Config:
     # --------------------------------------------------------
     # Felder, die bei Profil-Export/-Import AUSGESCHLOSSEN werden.
     # Passwort: Sicherheit. Debug/Report: umgebungsspezifisch.
+    # days_back: lauf-spezifisch, wird jedes Mal neu abgefragt.
     # --------------------------------------------------------
-    _EXCLUDED_FROM_PROFILE = frozenset({"password", "debug_keep_files", "debug_log", "report_dir"})
+    _EXCLUDED_FROM_PROFILE = frozenset({"password", "debug_keep_files", "debug_log", "report_dir", "days_back"})
 
     def to_profile_dict(self) -> dict:
         """Gibt ein dict zurueck, das als JSON-Profil gespeichert werden kann."""
