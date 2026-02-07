@@ -39,6 +39,7 @@ from email_report.config import (
     DEFAULT_MAILBOX,
     USE_SENTDATE_SEARCH,
 )
+from email_report.organizations import ORGANIZATIONS, get_organization
 
 
 # ============================================================
@@ -157,23 +158,23 @@ def prompt_model_select(default_model: str, ollama_url: str) -> str:
 # ============================================================
 # Profil-Auswahl beim Start
 # ============================================================
-def prompt_load_profile() -> Config | None:
+def prompt_load_profile() -> tuple[Config | None, str]:
     """
     Zeigt verfuegbare Profile an und laesst den Benutzer eines waehlen.
-    Gibt die geladene Config zurueck oder None wenn kein Profil gewaehlt wurde.
+    Gibt (Config, Profilname) zurueck oder (None, "") wenn kein Profil gewaehlt wurde.
     """
     profiles = list_profiles()
     if not profiles:
-        return None
+        return None, ""
 
     print("\nVerfuegbare Profile:")
     for i, name in enumerate(profiles, 1):
         print(f"  {i}) {name}")
-    print(f"  0) Kein Profil laden (Defaults verwenden)")
+    print(f"  0) Kein Profil laden (neues Profil erstellen)")
 
     raw = input("Profil waehlen (Nummer oder Name) [0]: ").strip()
     if not raw or raw == "0":
-        return None
+        return None, ""
 
     if raw.isdigit():
         idx = int(raw)
@@ -181,27 +182,33 @@ def prompt_load_profile() -> Config | None:
             name = profiles[idx - 1]
             cfg = load_profile(name)
             print(f"Profil '{name}' geladen.")
-            return cfg
+            return cfg, name
         print("Ungueltige Nummer. Kein Profil geladen.")
-        return None
+        return None, ""
 
     # Name direkt eingegeben
     if raw in profiles:
         cfg = load_profile(raw)
         print(f"Profil '{raw}' geladen.")
-        return cfg
+        return cfg, raw
 
     print(f"Profil '{raw}' nicht gefunden. Kein Profil geladen.")
-    return None
+    return None, ""
 
 
-def prompt_save_profile(cfg: Config) -> None:
+def prompt_save_profile(cfg: Config, default_name: str = "") -> None:
     """
     Fragt den Benutzer, ob die aktuelle Konfiguration als Profil gespeichert werden soll.
+    Wenn default_name gesetzt ist, wird er als Vorschlag angeboten.
     """
-    raw = input("\nKonfiguration als Profil speichern? (Name eingeben oder Return zum Ueberspringen): ").strip()
-    if not raw:
-        return
+    if default_name:
+        raw = input(f"\nKonfiguration als Profil speichern? (Name) [{default_name}]: ").strip()
+        if not raw:
+            raw = default_name
+    else:
+        raw = input("\nKonfiguration als Profil speichern? (Name eingeben oder Return zum Ueberspringen): ").strip()
+        if not raw:
+            return
 
     try:
         path = save_profile(raw, cfg)
@@ -259,5 +266,100 @@ def prompt_all_settings(cfg: Config) -> Config:
     cfg.use_sentdate = use_sentdate
     cfg.ollama_url = ollama_url
     cfg.model = model
+
+    return cfg
+
+
+# ============================================================
+# Profil-Zusammenfassung und Schnellstart (Flow A)
+# ============================================================
+def print_config_summary(cfg: Config) -> None:
+    """Gibt eine kompakte Zusammenfassung der geladenen Config aus."""
+    print("\n--- Aktuelle Konfiguration ---")
+    print(f"  IMAP:       {cfg.imap_server}:{cfg.imap_port}")
+    print(f"  SMTP:       {cfg.smtp_server}:{cfg.smtp_port} (SSL: {cfg.smtp_ssl})")
+    print(f"  Username:   {cfg.username}")
+    print(f"  Von:        {cfg.from_email}")
+    print(f"  An:         {cfg.recipient_email}")
+    print(f"  Name:       {cfg.name}")
+    print(f"  Mailbox:    {cfg.mailbox}")
+    print(f"  Zeitraum:   {cfg.days_back} Tage zurueck")
+    print(f"  LLM:        {cfg.model}")
+    print(f"  Ollama URL: {cfg.ollama_url}")
+    print(f"  Prompt:     {cfg.prompt_file}")
+    print("------------------------------")
+
+
+def prompt_confirm_or_edit(cfg: Config) -> tuple[Config, bool]:
+    """
+    Zeigt die Config-Zusammenfassung und fragt, ob bearbeitet werden soll.
+    Bei 'n' (Default) wird nur days_back abgefragt.
+    Bei 'y' wird der volle Edit-Dialog gestartet.
+    Gibt (Config, edited) zurueck – edited=True wenn der volle Dialog lief.
+    """
+    print_config_summary(cfg)
+    edit = prompt_bool_with_default("Einstellungen bearbeiten?", False)
+    if edit:
+        cfg = prompt_all_settings(cfg)
+        return cfg, True
+    # Auch im Schnellstart: Zeitraum ist lauf-spezifisch
+    cfg.days_back = prompt_int_with_default(
+        "Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
+    return cfg, False
+
+
+# ============================================================
+# Organisations-Auswahl und User-Settings (Flow B)
+# ============================================================
+def prompt_organization() -> dict | None:
+    """
+    Zeigt die verfuegbaren Organisations-Presets an.
+    Gibt das gewaehlte Preset-Dict zurueck oder None fuer 'Eigener Server'.
+    """
+    print("\nOrganisation / E-Mail-Provider waehlen:")
+    for i, org in enumerate(ORGANIZATIONS, 1):
+        print(f"  {i}) {org['label']}")
+    print(f"  0) Eigener Server (alle Felder manuell eingeben)")
+
+    raw = input("Auswahl [0]: ").strip()
+    if not raw or raw == "0":
+        return None
+
+    if raw.isdigit():
+        idx = int(raw)
+        if 1 <= idx <= len(ORGANIZATIONS):
+            org = ORGANIZATIONS[idx - 1]
+            print(f"Organisation '{org['label']}' gewaehlt.")
+            return org
+        print("Ungueltige Nummer. Eigener Server gewaehlt.")
+        return None
+
+    # Key direkt eingegeben
+    org = get_organization(raw)
+    if org:
+        print(f"Organisation '{org['label']}' gewaehlt.")
+        return org
+
+    print(f"Organisation '{raw}' nicht gefunden. Eigener Server gewaehlt.")
+    return None
+
+
+def prompt_user_settings(cfg: Config) -> Config:
+    """
+    Fragt nur die benutzer-spezifischen Felder ab (Server sind durch Org-Preset gesetzt).
+    """
+    print("\nBenutzer-Einstellungen (Return nimmt jeweils Default):\n")
+
+    cfg.username = prompt_with_default("Username", cfg.username)
+    cfg.from_email = prompt_with_default("From E-Mail", cfg.from_email)
+    cfg.recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email)
+    cfg.name = prompt_with_default("Name", cfg.name)
+
+    cfg.prompt_file = prompt_with_default("Prompt-Datei", cfg.prompt_file)
+    cfg.days_back = prompt_int_with_default("Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
+
+    ollama_url = prompt_with_default("Ollama URL", os.environ.get("OLLAMA_URL", cfg.ollama_url))
+    cfg.ollama_url = ollama_url
+    cfg.model = prompt_model_select(cfg.model, ollama_url)
 
     return cfg

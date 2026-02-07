@@ -133,12 +133,12 @@ def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_ur
 
         if debug is not None:
             debug["json_keys"] = sorted([str(k) for k in data.keys()])
-        if "done_reason" in data:
-            debug["done_reason"] = str(data.get("done_reason"))
-        if "model" in data:
-            debug["server_model"] = str(data.get("model"))
-        if "thinking" in data and isinstance(data.get("thinking"), str):
-            debug["thinking_len"] = len(data.get("thinking") or "")
+            if "done_reason" in data:
+                debug["done_reason"] = str(data.get("done_reason"))
+            if "model" in data:
+                debug["server_model"] = str(data.get("model"))
+            if "thinking" in data and isinstance(data.get("thinking"), str):
+                debug["thinking_len"] = len(data.get("thinking") or "")
 
         if isinstance(data, dict) and data.get("error"):
             if debug is not None:

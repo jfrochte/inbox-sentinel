@@ -6,4 +6,5 @@ venv/
 *.log
 .DS_Store
 .ipynb_checkpoints/
+profiles/*.json
 

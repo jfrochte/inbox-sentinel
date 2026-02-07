@@ -41,6 +41,9 @@ from email_report.interactive import (
     prompt_load_profile,
     prompt_save_profile,
     prompt_all_settings,
+    prompt_confirm_or_edit,
+    prompt_organization,
+    prompt_user_settings,
     prompt_secret_with_default,
 )
 from email_report.utils import (
@@ -72,12 +75,29 @@ def main():
     8) Files loeschen (ausser Debug)
     """
     # --- Profil laden ---
-    cfg = prompt_load_profile()
-    if cfg is None:
-        cfg = Config()
+    cfg, profile_name = prompt_load_profile()
 
-    # --- Alle Einstellungen interaktiv abfragen (Profilwerte als Defaults) ---
-    cfg = prompt_all_settings(cfg)
+    edited = False
+    if cfg is not None:
+        # Flow A: Profil vorhanden -> Schnellstart
+        cfg, edited = prompt_confirm_or_edit(cfg)
+    else:
+        # Flow B: Kein Profil -> Geführte Einrichtung
+        edited = True
+        cfg = Config()
+        org = prompt_organization()
+        if org is not None:
+            # Org-Preset anwenden, dann nur User-Settings fragen
+            cfg.organization = org["key"]
+            cfg.imap_server = org["imap_server"]
+            cfg.imap_port = org["imap_port"]
+            cfg.smtp_server = org["smtp_server"]
+            cfg.smtp_port = org["smtp_port"]
+            cfg.smtp_ssl = org["smtp_ssl"]
+            cfg = prompt_user_settings(cfg)
+        else:
+            # Eigener Server: voller Dialog wie bisher
+            cfg = prompt_all_settings(cfg)
 
     # --- Prompt-Datei laden ---
     try:
@@ -85,8 +105,9 @@ def main():
     except FileNotFoundError:
         raise SystemExit(f"Prompt-Datei nicht gefunden: {cfg.prompt_file}")
 
-    # --- Profil speichern ---
-    prompt_save_profile(cfg)
+    # --- Profil speichern (nur wenn etwas geaendert wurde) ---
+    if edited:
+        prompt_save_profile(cfg, default_name=profile_name)
 
     print("\nKonfiguration (Achtung für Passwort KEIN Default):\n")
 

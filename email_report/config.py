@@ -82,6 +82,9 @@ class Config:
     smtp_port: int = DEFAULT_SMTP_PORT
     smtp_ssl: bool = DEFAULT_SMTP_SSL
 
+    # Organisation (Preset-Key, z.B. "hs-bochum", "gmail", "outlook" oder "")
+    organization: str = ""
+
     # Account
     username: str = DEFAULT_USERNAME
     from_email: str = DEFAULT_FROM_EMAIL
