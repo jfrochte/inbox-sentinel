@@ -210,11 +210,8 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
             if not folder_name or folder_name in created_folders:
                 continue
 
-            # Zielordner als Unterordner der Mailbox (z.B. INBOX/Spam)
-            if mailbox.upper() == "INBOX":
-                target = f"INBOX{separator}{folder_name}"
-            else:
-                target = f"{mailbox}{separator}{folder_name}"
+            # Zielordner auf gleicher Ebene wie INBOX (Top-Level)
+            target = folder_name
 
             try:
                 status_c, _ = mail.create(target)
@@ -236,10 +233,7 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
             if not uid or not folder_name:
                 continue
 
-            if mailbox.upper() == "INBOX":
-                target = f"INBOX{separator}{folder_name}"
-            else:
-                target = f"{mailbox}{separator}{folder_name}"
+            target = folder_name
 
             try:
                 # Copy to target folder
