@@ -217,9 +217,16 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
                 target = f"{mailbox}{separator}{folder_name}"
 
             try:
-                mail.create(target)
+                status_c, _ = mail.create(target)
+                if status_c == "OK":
+                    log.info("IMAP-Ordner erstellt: %s", target)
             except Exception:
                 pass  # Ordner existiert vermutlich schon
+            # Subscribe: ohne Abo zeigen viele Clients den Ordner nicht an
+            try:
+                mail.subscribe(target)
+            except Exception:
+                pass
             created_folders.add(folder_name)
 
         # E-Mails verschieben
