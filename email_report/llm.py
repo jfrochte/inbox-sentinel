@@ -29,6 +29,7 @@ from email_report.report import _parse_llm_summary_block
 ALLOWED_ADDRESSING = {"DIRECT", "CC", "GROUP", "LIST", "UNKNOWN"}
 ALLOWED_ASKED = {"YES", "NO"}
 ALLOWED_STATUS = {"OK", "REPAIRED", "FALLBACK"}
+ALLOWED_CATEGORY = {"SPAM", "PHISHING", "FYI", "ACTIONABLE"}
 
 
 # ============================================================
@@ -197,6 +198,7 @@ def _make_fallback_block(email_obj: dict, person: str, reason: str) -> str:
     block = (
         f"Subject: {subj}\n"
         f"Sender: {sender}\n"
+        f"Category: ACTIONABLE\n"
         f"Context: \n"
         f"Addressing: UNKNOWN\n"
         f"Asked-Directly: NO\n"
@@ -219,6 +221,10 @@ def _validate_parsed_summary(d):
     if not (1 <= p <= 5):
         errs.append("priority")
 
+    category = (d.get("category") or "").strip().upper()
+    if category and category not in ALLOWED_CATEGORY:
+        d["category"] = "ACTIONABLE"
+
     addressing = (d.get("addressing") or "").strip().upper()
     if addressing and addressing not in ALLOWED_ADDRESSING:
         d["addressing"] = "UNKNOWN"
@@ -238,6 +244,10 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
     """Erzeugt einen sauberen Block (ein Label pro Zeile), egal wie das LLM antwortet."""
     subj = (parsed.get("subject") or "").strip() or (email_obj.get("subject") or "").strip() or "(ohne Betreff)"
     sender = (parsed.get("sender") or "").strip() or (email_obj.get("from") or "").strip() or "(unbekannt)"
+
+    category = (parsed.get("category") or "ACTIONABLE").strip().upper()
+    if category not in ALLOWED_CATEGORY:
+        category = "ACTIONABLE"
 
     addressing = (parsed.get("addressing") or "UNKNOWN").strip().upper()
     if addressing not in ALLOWED_ADDRESSING:
@@ -264,6 +274,7 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
     block = (
         f"Subject: {subj}\n"
         f"Sender: {sender}\n"
+        f"Category: {category}\n"
         f"Context: {context}\n"
         f"Addressing: {addressing}\n"
         f"Asked-Directly: {asked}\n"
@@ -326,6 +337,7 @@ def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_
         f"<<BEGIN>>\n"
         "Subject: ...\n"
         "Sender: ...\n"
+        "Category: SPAM | PHISHING | FYI | ACTIONABLE\n"
         "Context: ...\n"
         "Addressing: DIRECT | CC | GROUP | LIST | UNKNOWN\n"
         "Asked-Directly: YES | NO\n"
@@ -333,7 +345,7 @@ def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_
         f"Actions for {person}: ...\n"
         "Summary: ...\n"
         "<<END>>\n\n"
-        "DEFAULTS wenn unklar: Addressing=UNKNOWN, Asked-Directly=NO, Priority=5, Actions=Keine., Summary=Unklar. Bitte Original-Mail pruefen.\n\n"
+        "DEFAULTS wenn unklar: Category=ACTIONABLE, Addressing=UNKNOWN, Asked-Directly=NO, Priority=5, Actions=Keine., Summary=Unklar. Bitte Original-Mail pruefen.\n\n"
         "E-Mail (inklusive Historie als Kontext):\n"
         "-----\n"
         + email_text[:12000] +

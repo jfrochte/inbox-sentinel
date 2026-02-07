@@ -250,6 +250,9 @@ def prompt_all_settings(cfg: Config) -> Config:
     ollama_url = prompt_with_default("Ollama URL", os.environ.get("OLLAMA_URL", cfg.ollama_url))
     model = prompt_model_select(cfg.model, ollama_url)
 
+    # Auto-Sort
+    auto_sort = prompt_bool_with_default("Auto-Sort (Spam/Phishing/FYI in Unterordner verschieben)", cfg.auto_sort)
+
     # Aktualisierte Config zurueckgeben (Passwort und Debug-Felder bleiben unveraendert)
     cfg.prompt_file = prompt_file
     cfg.imap_server = imap_server
@@ -266,6 +269,7 @@ def prompt_all_settings(cfg: Config) -> Config:
     cfg.use_sentdate = use_sentdate
     cfg.ollama_url = ollama_url
     cfg.model = model
+    cfg.auto_sort = auto_sort
 
     return cfg
 
@@ -287,6 +291,7 @@ def print_config_summary(cfg: Config) -> None:
     print(f"  LLM:        {cfg.model}")
     print(f"  Ollama URL: {cfg.ollama_url}")
     print(f"  Prompt:     {cfg.prompt_file}")
+    print(f"  Auto-Sort:  {cfg.auto_sort}")
     print("------------------------------")
 
 
@@ -361,5 +366,7 @@ def prompt_user_settings(cfg: Config) -> Config:
     ollama_url = prompt_with_default("Ollama URL", os.environ.get("OLLAMA_URL", cfg.ollama_url))
     cfg.ollama_url = ollama_url
     cfg.model = prompt_model_select(cfg.model, ollama_url)
+
+    cfg.auto_sort = prompt_bool_with_default("Auto-Sort (Spam/Phishing/FYI in Unterordner verschieben)", cfg.auto_sort)
 
     return cfg

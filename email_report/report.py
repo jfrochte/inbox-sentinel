@@ -21,6 +21,7 @@ import html
 # Interne Paket-Imports
 # ============================================================
 from email_report.utils import write_secure
+from email_report.config import DEFAULT_SORT_FOLDERS
 
 
 # ============================================================
@@ -76,6 +77,7 @@ def _parse_llm_summary_block(block: str) -> dict:
     out = {
         "subject": "",
         "sender": "",
+        "category": "ACTIONABLE",
         "context": "",
         "addressing": "UNKNOWN",
         "asked": "NO",
@@ -96,6 +98,7 @@ def _parse_llm_summary_block(block: str) -> dict:
     label_regexes = [
         ("subject", re.compile(rf"(?i)\b(subject|betreff){sep}")),
         ("sender", re.compile(rf"(?i)\b(sender|from|von){sep}")),
+        ("category", re.compile(rf"(?i)\b(category|kategorie){sep}")),
         ("context", re.compile(rf"(?i)\b(context|kontext){sep}")),
         ("addressing", re.compile(rf"(?i)\b(addressing|adressierung|recipients|empf[aä]nger){sep}")),
         ("asked", re.compile(rf"(?i)\b(asked\s*directly|asked-directly|asked|direkt\s*angesprochen){sep}")),
@@ -111,6 +114,14 @@ def _parse_llm_summary_block(block: str) -> dict:
     def set_value(key: str, val: str) -> None:
         v = (val or "").strip()
         if not v:
+            return
+
+        if key == "category":
+            vv = v.strip().upper()
+            if vv in ("SPAM", "PHISHING", "FYI", "ACTIONABLE"):
+                out["category"] = vv
+            else:
+                out["category"] = "ACTIONABLE"
             return
 
         if key == "priority":
@@ -209,6 +220,9 @@ def _parse_llm_summary_block(block: str) -> dict:
             elif k in ("sender", "from", "von"):
                 set_value("sender", val)
                 current_section = None
+            elif k in ("category", "kategorie"):
+                set_value("category", val)
+                current_section = None
             elif k in ("context", "kontext"):
                 set_value("context", val)
                 current_section = "context"
@@ -283,7 +297,7 @@ def summaries_to_html_pre(sorted_text: str) -> str:
     )
 
 
-def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report", expected_count=None) -> str:
+def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False) -> str:
     """
     Baut eine besser scanbare HTML-Mail (Kartenansicht).
     Hinweis: Der "Schnellblick" wurde bewusst entfernt.
@@ -310,6 +324,20 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         return (
             f"<span style=\"display:inline-block;padding:2px 8px;border-radius:999px;"
             f"background:{bg};color:{fg};font-size:12px;font-weight:700;\">P{priority}</span>"
+        )
+
+    def category_badge(cat: str) -> str:
+        cat = (cat or "ACTIONABLE").strip().upper()
+        colors = {
+            "SPAM": ("#ffe5e5", "#8a1f1f"),
+            "PHISHING": ("#ffe5e5", "#8a1f1f"),
+            "FYI": ("#dbeafe", "#1e40af"),
+            "ACTIONABLE": ("#dcfce7", "#166534"),
+        }
+        bg, fg = colors.get(cat, ("#f3f4f6", "#374151"))
+        return (
+            f"<span style=\"display:inline-block;padding:2px 8px;border-radius:999px;"
+            f"background:{bg};color:{fg};font-size:12px;font-weight:700;margin-left:4px;\">{esc(cat)}</span>"
         )
 
     parts = []
@@ -352,6 +380,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         p = int(it.get("priority", 5) or 5)
         subj = esc(it.get("subject", ""))
         sender = esc(it.get("sender", ""))
+        cat = (it.get("category") or "ACTIONABLE").strip().upper()
         addressing = esc(it.get("addressing", "UNKNOWN"))
         asked = esc(it.get("asked", "NO"))
         summary = esc_ml(it.get("summary", ""))
@@ -368,6 +397,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
 
         parts.append("<div style=\"display:flex;align-items:center;gap:10px;\">")
         parts.append(prio_badge(p))
+        parts.append(category_badge(cat))
         parts.append(f"<div style=\"font-size:15px;font-weight:800;color:#111827;\">{subj}</div>")
         parts.append("</div>")
 
@@ -379,6 +409,15 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
             + (f" | <b>Status</b>: {esc(status)}" if status and status != "OK" else "")
             + f"</div>"
         )
+
+        # Sortierhinweis: zeigt Zielordner wenn auto_sort aktiv und Kategorie verschoben wird
+        if auto_sort and cat in DEFAULT_SORT_FOLDERS:
+            target_folder = DEFAULT_SORT_FOLDERS[cat]
+            parts.append(
+                f"<div style=\"margin-top:4px;font-size:12px;color:#6b7280;font-style:italic;\">"
+                f"Verschoben nach: {esc(target_folder)}"
+                f"</div>"
+            )
 
         if summary:
             parts.append(f"<div style=\"margin-top:10px;color:#374151;line-height:1.45;\">{summary}</div>")
@@ -410,7 +449,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
     return "".join(parts)
 
 
-def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expected_count=None) -> str:
+def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False) -> str:
     """
     Default: Kartenansicht.
     Fallback: setze ENV EMAIL_REPORT_HTML_PRE=1 fuer den alten <pre>-Output.
@@ -418,4 +457,4 @@ def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expec
     use_pre = os.environ.get("EMAIL_REPORT_HTML_PRE", "0").strip().lower() in ("1", "true", "yes", "on")
     if use_pre:
         return summaries_to_html_pre(sorted_text)
-    return summaries_to_html_cards(sorted_text, title=title, expected_count=expected_count)
+    return summaries_to_html_cards(sorted_text, title=title, expected_count=expected_count, auto_sort=auto_sort)

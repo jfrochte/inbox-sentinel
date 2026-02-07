@@ -36,7 +36,7 @@ except Exception:
 # ============================================================
 # Interne Paket-Imports
 # ============================================================
-from email_report.config import Config, DEBUG_KEEP_FILES, DEBUG_LOG, REPORT_DIR
+from email_report.config import Config, DEBUG_KEEP_FILES, DEBUG_LOG, REPORT_DIR, DEFAULT_SORT_FOLDERS
 from email_report.interactive import (
     prompt_load_profile,
     prompt_save_profile,
@@ -53,9 +53,9 @@ from email_report.utils import (
     append_secure,
     write_jsonl,
 )
-from email_report.imap_client import imap_fetch_emails_for_range
+from email_report.imap_client import imap_fetch_emails_for_range, imap_move_emails
 from email_report.llm import _analyze_email_guaranteed
-from email_report.report import sort_summaries_by_priority, summaries_to_html
+from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block
 from email_report.smtp_client import send_email_html
 
 
@@ -165,6 +165,8 @@ def main():
     if tqdm is not None:
         iterator = tqdm(emails, desc="Verarbeite E-Mails")
 
+    sort_moves = []  # Sammelt {"uid": ..., "folder": ...} fuer Auto-Sort
+
     # --- Verarbeitung: pro Mail LLM Summary erzeugen ---
     for idx_mail, e in enumerate(iterator, start=1):
         # Mailtext fuer LLM: Header + Body
@@ -203,6 +205,13 @@ def main():
                     dbg['hint'] = 'Server liefert kein Feld "response" (sondern z.B. message/choices). Der Parser liest das jetzt; falls weiterhin leer: resp_text_head pruefen.'
             write_jsonl(debug_file, dbg)
 
+        # Category aus final_block extrahieren fuer Auto-Sort
+        if cfg.auto_sort and e.get("uid"):
+            parsed_block = _parse_llm_summary_block(final_block)
+            cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
+            if cat in DEFAULT_SORT_FOLDERS:
+                sort_moves.append({"uid": e["uid"], "folder": DEFAULT_SORT_FOLDERS[cat]})
+
         append_secure(summaries_file, final_block)
         append_secure(summaries_file, "\n\n-----------------------\n\n")
 
@@ -214,7 +223,7 @@ def main():
         sorted_text = f.read()
 
     subject = f"Daily Email Report ({start_day.isoformat()} bis {end_day.isoformat()})"
-    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(emails))
+    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(emails), auto_sort=cfg.auto_sort)
 
     # --- Versenden ---
     sent_ok = False
@@ -233,6 +242,26 @@ def main():
         )
         sent_ok = True
     finally:
+        # --- Auto-Sort: NACH dem Versand (Report hat Vorrang) ---
+        if sent_ok and cfg.auto_sort and sort_moves:
+            log.info("Auto-Sort: %d E-Mail(s) zum Verschieben.", len(sort_moves))
+            try:
+                sort_result = imap_move_emails(
+                    username=cfg.username,
+                    password=cfg.password,
+                    imap_server=cfg.imap_server,
+                    imap_port=cfg.imap_port,
+                    mailbox=cfg.mailbox,
+                    moves=sort_moves,
+                )
+                log.info("Auto-Sort Ergebnis: %d verschoben, %d fehlgeschlagen.",
+                         sort_result["moved"], sort_result["failed"])
+                if sort_result["errors"]:
+                    for err in sort_result["errors"]:
+                        log.warning("Auto-Sort Fehler: %s", err)
+            except Exception as e:
+                log.warning("Auto-Sort fehlgeschlagen: %s", e)
+
         # Nach erfolgreichem Versand: Dateien loeschen, ausser Debug
         if sent_ok and (not debug_keep):
             safe_remove(summaries_file)

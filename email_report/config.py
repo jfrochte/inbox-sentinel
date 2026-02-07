@@ -52,6 +52,9 @@ SKIP_OWN_SENT_MAILS = True
 # Fuer "ich will die Mails, die an diesem Tag gesendet wurden" ist SENT* oft naeher dran.
 USE_SENTDATE_SEARCH = True
 
+# Auto-Sort: Zielordner fuer automatische E-Mail-Sortierung nach Kategorie
+DEFAULT_SORT_FOLDERS = {"SPAM": "Spam", "PHISHING": "Quarantine", "FYI": "FYI"}
+
 # Report Dateien
 REPORT_DIR = "."
 DEBUG_KEEP_FILES = os.environ.get("EMAIL_REPORT_DEBUG", "0").strip().lower() in ("1", "true", "yes", "on")
@@ -105,6 +108,9 @@ class Config:
 
     # Prompt
     prompt_file: str = "prompt.txt"
+
+    # Auto-Sort: E-Mails nach LLM-Kategorie in IMAP-Unterordner verschieben
+    auto_sort: bool = True
 
     # Diese Felder werden NICHT in Profilen gespeichert:
     password: str = ""

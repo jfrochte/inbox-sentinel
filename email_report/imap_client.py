@@ -8,6 +8,9 @@ Abhaengigkeiten innerhalb des Pakets:
 Wichtige Aenderung gegenueber der monolithischen Version:
   skip_own_sent ist jetzt ein expliziter Parameter statt eines globalen Flags
   (SKIP_OWN_SENT_MAILS). Der Wert wird aus config.skip_own_sent uebergeben.
+
+UID-basierter Fetch: Statt Sequenznummern werden UIDs verwendet,
+da diese ueber Sessions hinweg stabil sind (noetig fuer Auto-Sort).
 """
 
 # ============================================================
@@ -15,6 +18,7 @@ Wichtige Aenderung gegenueber der monolithischen Version:
 # ============================================================
 import imaplib
 import email
+import re
 from datetime import datetime, timedelta
 
 # tqdm ist optional: wenn installiert, gibt es Fortschrittsbalken.
@@ -35,7 +39,7 @@ from email_report.email_parser import (
 
 
 # ============================================================
-# IMAP Abruf (Punkt 6: optional SENT* Suche)
+# IMAP Abruf (UID-basiert, Punkt 6: optional SENT* Suche)
 # ============================================================
 def imap_fetch_emails_for_range(username: str, password: str, from_email: str, days_back: int,
                                 imap_server: str, imap_port: int, mailbox: str,
@@ -43,6 +47,7 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
     """
     Liefert Liste von dicts:
     {
+      'uid': ...,
       'subject': ...,
       'from': ...,
       'from_addr': ...,
@@ -89,9 +94,9 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
         else:
             query = f"(SINCE {since_str} BEFORE {before_str})"
 
-        status, data = mail.search(None, query)
+        status, data = mail.uid('search', None, query)
         if status != "OK":
-            log.warning("IMAP search failed. status=%s query=%s", status, query)
+            log.warning("IMAP UID search failed. status=%s query=%s", status, query)
             return []
 
         msg_ids = data[0].split()
@@ -102,8 +107,8 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
         if tqdm is not None:
             iterator = tqdm(msg_ids, desc="Download E-Mails")
 
-        for msg_id in iterator:
-            typ, msg_data = mail.fetch(msg_id, "(BODY.PEEK[])")
+        for uid_bytes in iterator:
+            typ, msg_data = mail.uid('fetch', uid_bytes, "(BODY.PEEK[])")
             if typ != "OK":
                 continue
 
@@ -131,6 +136,7 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
             body = extract_best_body_text(message)
 
             emails.append({
+                "uid": uid_bytes.decode(),
                 "subject": subject,
                 "from": from_header,
                 "from_addr": from_addr,
@@ -146,3 +152,118 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
             pass
 
     return emails
+
+
+# ============================================================
+# IMAP Auto-Sort: E-Mails in Unterordner verschieben
+# ============================================================
+def imap_move_emails(username: str, password: str, imap_server: str, imap_port: int,
+                     mailbox: str, moves: list[dict]) -> dict:
+    """
+    Verschiebt E-Mails per UID in IMAP-Unterordner.
+
+    moves: Liste von {"uid": "...", "folder": "Spam"/"Quarantine"/"FYI"}
+
+    Ablauf pro E-Mail:
+    1) Ordner-Separator via mail.list() erkennen
+    2) Unterordner erstellen wenn noetig (mail.create)
+    3) mail.uid('copy', uid, zielordner)
+    4) mail.uid('store', uid, '+FLAGS', '(\\Deleted)')
+    5) mail.expunge()
+
+    Gibt {"moved": int, "failed": int, "errors": [str]} zurueck.
+    """
+    result = {"moved": 0, "failed": 0, "errors": []}
+
+    if not moves:
+        return result
+
+    mail = imaplib.IMAP4_SSL(imap_server, imap_port)
+    try:
+        mail.login(username, password)
+
+        # Ordner-Separator erkennen (z.B. "/" oder ".")
+        separator = "/"
+        try:
+            status, folder_list = mail.list()
+            if status == "OK" and folder_list:
+                first = folder_list[0]
+                if isinstance(first, bytes):
+                    first = first.decode("utf-8", errors="replace")
+                # Format: '(\\HasNoChildren) "/" INBOX'
+                m = re.search(r'\) "(.)" ', first)
+                if m:
+                    separator = m.group(1)
+        except Exception as e:
+            log.debug("Konnte Ordner-Separator nicht ermitteln, nutze '/': %s", e)
+
+        # Quell-Mailbox read-write oeffnen
+        status, _ = mail.select(mailbox, readonly=False)
+        if status != "OK":
+            result["errors"].append(f"Konnte Mailbox '{mailbox}' nicht oeffnen")
+            return result
+
+        # Bekannte Zielordner sammeln und ggf. erstellen
+        created_folders = set()
+        for move in moves:
+            folder_name = move.get("folder", "")
+            if not folder_name or folder_name in created_folders:
+                continue
+
+            # Zielordner als Unterordner der Mailbox (z.B. INBOX/Spam)
+            if mailbox.upper() == "INBOX":
+                target = f"INBOX{separator}{folder_name}"
+            else:
+                target = f"{mailbox}{separator}{folder_name}"
+
+            try:
+                mail.create(target)
+            except Exception:
+                pass  # Ordner existiert vermutlich schon
+            created_folders.add(folder_name)
+
+        # E-Mails verschieben
+        for move in moves:
+            uid = move.get("uid", "")
+            folder_name = move.get("folder", "")
+            if not uid or not folder_name:
+                continue
+
+            if mailbox.upper() == "INBOX":
+                target = f"INBOX{separator}{folder_name}"
+            else:
+                target = f"{mailbox}{separator}{folder_name}"
+
+            try:
+                # Copy to target folder
+                status, _ = mail.uid('copy', uid.encode() if isinstance(uid, str) else uid, target)
+                if status != "OK":
+                    result["failed"] += 1
+                    result["errors"].append(f"UID {uid}: copy nach {target} fehlgeschlagen")
+                    continue
+
+                # Mark as deleted in source
+                mail.uid('store', uid.encode() if isinstance(uid, str) else uid, '+FLAGS', '(\\Deleted)')
+                result["moved"] += 1
+
+            except Exception as e:
+                result["failed"] += 1
+                result["errors"].append(f"UID {uid}: {e}")
+                log.warning("Fehler beim Verschieben von UID %s nach %s: %s", uid, target, e)
+
+        # Expunge all deleted messages at once
+        try:
+            mail.expunge()
+        except Exception as e:
+            log.warning("Expunge fehlgeschlagen: %s", e)
+
+    except Exception as e:
+        result["errors"].append(f"IMAP-Verbindungsfehler: {e}")
+        log.warning("IMAP Auto-Sort Verbindungsfehler: %s", e)
+    finally:
+        try:
+            mail.logout()
+        except Exception:
+            pass
+
+    return result
