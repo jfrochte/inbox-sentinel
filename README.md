@@ -162,6 +162,10 @@ Key environment variables:
 - Der Prompt und die deterministischen Ausgabefelder (Summary, Context, Actions) sind auf Deutsch. Die Prompt-Anweisungen sind auf Englisch.
 - Primaer mit Dovecot-basierten IMAP-Servern getestet. Andere Server koennten sich anders verhalten.
 
+## Acknowledgements / Danksagung
+
+Developed by human with AI assistance (u.a. Claude, Anthropic). / Menschlicher Entwickler mit KI-Unterstuetzung (u.a. Claude, Anthropic).
+
 ## License / Lizenz
 
 [MIT](LICENSE)
