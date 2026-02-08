@@ -216,6 +216,8 @@ def main():
                 'model': cfg.model,
                 'ollama_url': cfg.ollama_url,
                 'ts': datetime.now().isoformat(timespec='seconds'),
+                'sender_context_len': len(sender_context),
+                'sender_addr': sender_addr,
             }
 
         # --- Punkt B: sender_context an LLM-Analyse uebergeben ---

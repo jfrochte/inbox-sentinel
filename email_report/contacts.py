@@ -51,6 +51,16 @@ def _email_to_filename(email_addr: str) -> str:
     return email_addr.strip().lower().replace("@", "_") + ".json"
 
 
+def _clean_display_name(raw: str) -> str:
+    """Extrahiert sauberen Namen aus IMAP-Header-Format wie '"Roters, Kai" <kai.roters@...>'."""
+    if not raw:
+        return ""
+    m = re.match(r'"?([^"<]+)"?\s*<', raw)
+    if m:
+        return m.group(1).strip().strip('"')
+    return raw.strip()
+
+
 def _ensure_contacts_dir() -> str:
     """Erstellt das Kontaktverzeichnis falls noetig und gibt den Pfad zurueck."""
     os.makedirs(_CONTACTS_DIR, exist_ok=True)
@@ -171,8 +181,10 @@ def merge_contact_update(existing: dict | None, llm_extracted: dict,
 
     # Basis-Felder
     contact["email"] = email_addr
-    if display_name and (not contact.get("name") or not contact["name"].strip()):
-        contact["name"] = display_name
+    if display_name:
+        clean_name = _clean_display_name(display_name)
+        if clean_name and (not contact.get("name") or not contact["name"].strip()):
+            contact["name"] = clean_name
 
     # Felder mit value/updated
     dated_fields = ["tone", "language", "role_or_title", "relationship", "communication_style"]
@@ -236,10 +248,10 @@ Email body:
 Return ONLY a JSON object with these fields (leave empty string if unknown):
 - "tone": How does the sender communicate? e.g. "formal, siezt", "informell, duzt", "neutral"
 - "language": Language of the email, e.g. "de", "en", "de+en gemischt"
-- "role_or_title": Sender's role or title if recognizable, e.g. "Professor fuer Informatik"
-- "relationship": Relationship to {person}, e.g. "Kollege", "externer Dienstleister"
+- "role_or_title": The sender's role or title. If not explicitly stated, make your best guess based on email content, signature, and context. Add "(vermutlich)" if uncertain. Example: "Sachbearbeiterin Personalwesen (vermutlich)"
+- "relationship": Relationship to {person}. Always provide your best guess, even if uncertain. Add "(vermutlich)" if guessing. Examples: "Kollege, gleiche Hochschule", "Externer Dienstleister (vermutlich)"
 - "communication_style": Detailed description of how the sender communicates: formal/informal, greeting style, directness, typical patterns
-- "topics": List of 1-3 keywords about the current email content
+- "topics": List of 1-3 SHORT SENTENCES (not single words!) describing what this email is about. BAD: "HR" GOOD: "Bitte um Pruefung und Unterschrift von Dokumenten zur Weiterbesch." BAD: "Termin" GOOD: "Terminabstimmung fuer Projekttreffen am 15.02."
 
 Return ONLY the JSON, no explanation."""
 
@@ -248,8 +260,8 @@ Return ONLY the JSON, no explanation."""
         "prompt": prompt,
         "stream": False,
         "options": {
-            "num_ctx": 8192,
-            "num_predict": 800,
+            "num_ctx": 32768,
+            "num_predict": 1200,
         },
     }
 
