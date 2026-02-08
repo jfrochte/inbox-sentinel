@@ -54,57 +54,71 @@ inbox-sentinel verbindet sich mit einer IMAP-Mailbox, holt aktuelle E-Mails und 
 - **Profile** -- Server- und Account-Einstellungen als JSON-Profile speichern/laden
 - **Plattformuebergreifend** -- Bootstrap-Skripte fuer Linux/macOS (sh) und Windows (PowerShell)
 
-## Requirements / Voraussetzungen
+## Prerequisites / Voraussetzungen
 
-- Python 3.10+
-- [Ollama](https://ollama.com/) running locally with a model (default: `qwen2.5:7b-instruct-q8_0`)
-- An IMAP/SMTP email account (for testing: use a dedicated dummy account)
+### 1. Python 3.10+
 
-## Quick start / Schnellstart
+Download: [python.org](https://www.python.org/downloads/). Make sure `python3` (or `python`) and `pip` are available in your terminal.
+
+Download: [python.org](https://www.python.org/downloads/). `python3` (bzw. `python`) und `pip` muessen im Terminal verfuegbar sein.
+
+### 2. Ollama (local LLM server / lokaler LLM-Server)
+
+inbox-sentinel uses [Ollama](https://ollama.com/) to run a language model locally on your machine. No data is sent to external servers.
+
+inbox-sentinel nutzt [Ollama](https://ollama.com/), um ein Sprachmodell lokal auf dem eigenen Rechner auszufuehren. Es werden keine Daten an externe Server gesendet.
+
+**Install Ollama / Ollama installieren:**
+- **Linux:** `curl -fsSL https://ollama.com/install.sh | sh`
+- **macOS:** Download from [ollama.com/download](https://ollama.com/download) or `brew install ollama`
+- **Windows:** Download from [ollama.com/download](https://ollama.com/download)
+
+**Download a model / Modell herunterladen:**
 
 ```bash
-# 1. Clone
+ollama pull qwen2.5:7b-instruct-q8_0
+```
+
+This downloads ~8 GB. Other instruction-tuned models also work (e.g. `llama3.1:8b-instruct-q8_0`), but the prompt is optimized for `qwen2.5`. Ollama must be running before you start inbox-sentinel (the `run.sh`/`run.ps1` scripts will try to start it automatically).
+
+Dies laedt ca. 8 GB herunter. Andere instruction-tuned Modelle funktionieren ebenfalls (z.B. `llama3.1:8b-instruct-q8_0`), aber der Prompt ist fuer `qwen2.5` optimiert. Ollama muss laufen bevor inbox-sentinel gestartet wird (die `run.sh`/`run.ps1`-Skripte versuchen es automatisch zu starten).
+
+### 3. A test email account / Ein Test-E-Mail-Account
+
+You need an IMAP/SMTP email account. **Use a dedicated dummy account for testing** -- do not use your real inbox (see [warning above](#warning--warnung)).
+
+Ein IMAP/SMTP-E-Mail-Account wird benoetigt. **Zum Testen einen dedizierten Dummy-Account verwenden** -- nicht die echte Inbox benutzen (siehe [Warnung oben](#warning--warnung)).
+
+## Installation
+
+```bash
+# 1. Clone / Klonen
 git clone https://github.com/jfrochte/inbox-sentinel.git
 cd inbox-sentinel
 
-# 2. Bootstrap (creates venv, installs dependencies)
+# 2. Bootstrap (creates venv + installs Python dependencies)
+#    Bootstrap (erstellt venv + installiert Python-Abhaengigkeiten)
 ./bootstrap.sh        # Linux / macOS
 # .\bootstrap.ps1     # Windows PowerShell
-
-# 3. Activate venv
-source .venv/bin/activate
-
-# 4. Make sure Ollama is running with a model
-ollama pull qwen2.5:7b-instruct-q8_0
-
-# 5. Run
-python -m email_report
 ```
 
-The interactive prompt will guide you through server settings, account details, and profile management.
-
----
+## Usage / Benutzung
 
 ```bash
-# 1. Klonen
-git clone https://github.com/jfrochte/inbox-sentinel.git
-cd inbox-sentinel
+# Option A: Use the run script (checks Ollama, activates venv)
+#           Run-Skript verwenden (prueft Ollama, aktiviert venv)
+./run.sh              # Linux / macOS
+# .\run.ps1           # Windows PowerShell
 
-# 2. Bootstrap (erstellt venv, installiert Abhaengigkeiten)
-./bootstrap.sh        # Linux / macOS
-# .\bootstrap.ps1     # Windows PowerShell
-
-# 3. venv aktivieren
+# Option B: Run directly (venv must be active, Ollama must be running)
+#           Direkt ausfuehren (venv muss aktiv sein, Ollama muss laufen)
 source .venv/bin/activate
-
-# 4. Ollama mit Modell starten
-ollama pull qwen2.5:7b-instruct-q8_0
-
-# 5. Ausfuehren
 python -m email_report
 ```
 
-Der interaktive Prompt fuehrt durch Server-Einstellungen, Account-Daten und Profilverwaltung.
+The interactive prompt will guide you through server settings, account details, and profile management. On the first run all settings are prompted; on subsequent runs a saved profile can be loaded.
+
+Der interaktive Prompt fuehrt durch Server-Einstellungen, Account-Daten und Profilverwaltung. Beim ersten Lauf werden alle Einstellungen abgefragt; bei weiteren Laeufen kann ein gespeichertes Profil geladen werden.
 
 ## Architecture / Architektur
 
