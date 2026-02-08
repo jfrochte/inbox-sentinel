@@ -45,11 +45,14 @@ INTERNAL DECISION (do NOT output this label):
    - PHISHING if suspicious links/login/credentials/urgent account verification/fake invoice/impersonation/domain mismatch.
    - SPAM if unsolicited advertising/promo/junk with no work relevance.
 2) If not threat: decide DESK for {person} (YES/OPTIONAL/NO):
-   - DESK=YES if {person} likely must react/decide/approve OR should know due to impact/risk:
+   - DESK=YES if {person} likely must react/decide/approve/process/read-and-act OR should know due to impact/risk:
      triggers: deadline change, blocking issue, conflict/complaint, budget/contract, compliance/datenschutz/IT security,
-     external partner or leadership-level topic, anything that could escalate.
+     external partner or leadership-level topic, anything that could escalate,
+     response to {person}'s own request (e.g. someone delivering documents/info/data that {person} asked for),
+     attachments or content that {person} likely needs to review/process/forward.
    - DESK=OPTIONAL if nice-to-know or CC-pressure (visibility only) without risk/impact.
    - DESK=NO if clearly irrelevant (generic newsletter/ads/no impact).
+   - When in doubt between YES and OPTIONAL: choose YES. It is better to surface an email than to miss it.
 
 CATEGORY (deterministic):
 - If PHISHING -> Category PHISHING, Priority 5, Actions Keine. Summary must mention phishing suspicion.
