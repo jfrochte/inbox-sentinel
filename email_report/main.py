@@ -54,7 +54,8 @@ from email_report.utils import (
     write_jsonl,
 )
 from email_report.imap_client import imap_fetch_emails_for_range, imap_move_emails
-from email_report.llm import _analyze_email_guaranteed
+from email_report.llm import _analyze_thread_guaranteed
+from email_report.threading import group_into_threads
 from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block
 from email_report.smtp_client import send_email_html
 
@@ -137,6 +138,10 @@ def main():
         print("Keine E-Mails im gewaehlten Zeitraum gefunden.")
         return
 
+    total_emails = len(emails)
+    threads = group_into_threads(emails)
+    log.info("Threading: %d E-Mails -> %d Threads", total_emails, len(threads))
+
     # --- Report-Dateien vorbereiten ---
     start_day = (datetime.now() - timedelta(days=cfg.days_back)).date()
     end_day = datetime.now().date()
@@ -161,43 +166,35 @@ def main():
         safe_remove(summaries_file)
         safe_remove(sorted_file)
 
-    iterator = emails
+    iterator = threads
     if tqdm is not None:
-        iterator = tqdm(emails, desc="Verarbeite E-Mails")
+        iterator = tqdm(threads, desc="Verarbeite Threads")
 
     sort_moves = []  # Sammelt {"uid": ..., "folder": ...} fuer Auto-Sort
 
-    # --- Verarbeitung: pro Mail LLM Summary erzeugen ---
-    for idx_mail, e in enumerate(iterator, start=1):
-        # Mailtext fuer LLM: Header + Body
-        mail_text = []
-        mail_text.append(f"Subject: {e['subject']}")
-        mail_text.append(f"From: {e['from']}")
-        mail_text.append(f"To: {e['to']}")
-        if e.get("cc"):
-            mail_text.append(f"Cc: {e['cc']}")
-        mail_text.append("")
-        mail_text.append(e.get("body", ""))
-
-        mail_text_for_llm = "\n".join(mail_text).strip()
+    # --- Verarbeitung: pro Thread LLM Summary erzeugen ---
+    for idx_thread, thread in enumerate(iterator, start=1):
+        newest = thread[-1]
+        thread_uids = [e.get("uid") for e in thread if e.get("uid")]
 
         dbg = None
         if debug_log:
             dbg = {
-                'idx': idx_mail,
-                'subject': e.get('subject',''),
-                'from': e.get('from',''),
-                'to': e.get('to',''),
-                'cc': e.get('cc',''),
+                'idx': idx_thread,
+                'thread_size': len(thread),
+                'uids': thread_uids,
+                'subject': newest.get('subject',''),
+                'from': newest.get('from',''),
+                'to': newest.get('to',''),
+                'cc': newest.get('cc',''),
                 'model': cfg.model,
                 'ollama_url': cfg.ollama_url,
                 'ts': datetime.now().isoformat(timespec='seconds'),
             }
 
-        final_block = _analyze_email_guaranteed(cfg.model, e, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, debug=dbg)
+        final_block = _analyze_thread_guaranteed(cfg.model, thread, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, debug=dbg)
 
         if debug_log and debug_file and dbg is not None:
-            # Schneller Hinweis, wenn "response" fehlt und deshalb frueher alles leer war.
             st0 = (dbg.get('stage0') or {})
             keys = st0.get('json_keys') or []
             if dbg.get('final_status') == 'FALLBACK' and dbg.get('fallback_reason') == 'leere Antwort':
@@ -206,11 +203,13 @@ def main():
             write_jsonl(debug_file, dbg)
 
         # Category aus final_block extrahieren fuer Auto-Sort
-        if cfg.auto_sort and e.get("uid"):
+        # ALLE UIDs eines Threads bekommen die gleiche Kategorie
+        if cfg.auto_sort and thread_uids:
             parsed_block = _parse_llm_summary_block(final_block)
             cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
             if cat in DEFAULT_SORT_FOLDERS:
-                sort_moves.append({"uid": e["uid"], "folder": DEFAULT_SORT_FOLDERS[cat]})
+                for uid in thread_uids:
+                    sort_moves.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat]})
 
         append_secure(summaries_file, final_block)
         append_secure(summaries_file, "\n\n-----------------------\n\n")
@@ -223,7 +222,7 @@ def main():
         sorted_text = f.read()
 
     subject = f"Daily Email Report ({start_day.isoformat()} bis {end_day.isoformat()})"
-    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(emails), auto_sort=cfg.auto_sort)
+    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(threads), auto_sort=cfg.auto_sort, total_emails=total_emails)
 
     # --- Versenden ---
     sent_ok = False

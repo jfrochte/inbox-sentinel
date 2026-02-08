@@ -21,6 +21,7 @@ import requests
 # ============================================================
 from email_report.utils import log, _tail_text
 from email_report.report import _parse_llm_summary_block
+from email_report.threading import format_thread_for_llm
 
 
 # ============================================================
@@ -158,7 +159,7 @@ def _build_user_context(person: str) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None) -> str:
+def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None, num_ctx: int = 32768) -> str:
     headers = {"Content-Type": "application/json"}
 
     # Roles-String aufbereiten: wenn gefuellt -> formatierte Zeile, sonst leer
@@ -180,7 +181,7 @@ def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_ur
         "prompt": prompt,
         "stream": False,
         "options": {
-            "num_ctx": 32768,
+            "num_ctx": num_ctx,
             "num_predict": 4000,
         },
     }
@@ -318,7 +319,8 @@ def _validate_parsed_summary(d):
 
 
 def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, status: str = "OK", raw_excerpt: str = "",
-                                 person_email: str = "", detected_addressing: str = "", is_self_sent: bool = False) -> str:
+                                 person_email: str = "", detected_addressing: str = "", is_self_sent: bool = False,
+                                 thread_size: int = 1) -> str:
     """Erzeugt einen sauberen Block (ein Label pro Zeile), egal wie das LLM antwortet.
     Wendet danach deterministische Regeln an (Addressing-Override, Self-Sent, SPAM/PHISHING, LIST-Cap)."""
     subj = (parsed.get("subject") or "").strip() or (email_obj.get("subject") or "").strip() or "(ohne Betreff)"
@@ -382,6 +384,10 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
         f"Asked-Directly: {asked}\n"
         f"Priority: {prio}\n"
         f"LLM-Status: {status}\n"
+    )
+    if thread_size > 1:
+        block += f"Thread-Size: {thread_size}\n"
+    block += (
         f"Actions for {person}: {actions}\n"
         f"Summary: {summary}\n"
     )
@@ -541,3 +547,127 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
         debug['final_status'] = 'FALLBACK'
         debug['fallback_reason'] = 'Repair gescheitert / unparsebar'
     return _make_fallback_block(email_obj, person, "Repair gescheitert / unparsebar")
+
+
+# ============================================================
+# Thread-aware Analyse
+# ============================================================
+def _detect_addressing_for_thread(thread: list[dict], person: str, person_email: str) -> tuple:
+    """
+    Addressing-Erkennung fuer einen ganzen Thread.
+    - Neueste Mail self-sent? -> DIRECT, is_self_sent=True
+    - Sonst: alle Mails pruefen, staerkste Adressierung gewinnt
+    - Person hat fruehere Mail gesendet aber nicht neueste -> DIRECT, is_self_sent=False
+    """
+    if len(thread) == 1:
+        return _detect_addressing(thread[0], person, person_email)
+
+    newest = thread[-1]
+
+    # Neueste Mail self-sent?
+    from_addr = (newest.get("from_addr") or newest.get("from") or "").strip().lower()
+    if person_email and person_email.lower() in from_addr:
+        return "DIRECT", True
+
+    # Person hat fruehere Mail gesendet -> DIRECT (aktive Konversation)
+    for e in thread[:-1]:
+        ea = (e.get("from_addr") or e.get("from") or "").strip().lower()
+        if person_email and person_email.lower() in ea:
+            return "DIRECT", False
+
+    # Staerkste Adressierung ueber alle Mails
+    strength = {"DIRECT": 5, "CC": 4, "LIST": 3, "GROUP": 2, "UNKNOWN": 1}
+    best_addressing = "UNKNOWN"
+    best_strength = 0
+
+    for e in thread:
+        addr, _ = _detect_addressing(e, person, person_email)
+        s = strength.get(addr, 0)
+        if s > best_strength:
+            best_strength = s
+            best_addressing = addr
+
+    return best_addressing, False
+
+
+def _analyze_thread_guaranteed(model: str, thread: list[dict], person: str, ollama_url: str,
+                               prompt_base: str, roles: str = "", person_email: str = "",
+                               debug: dict | None = None) -> str:
+    """Thread-aware Analyse. Einzelne Mail delegiert an _analyze_email_guaranteed (zero regression)."""
+    if len(thread) == 1:
+        return _analyze_email_guaranteed(model, thread[0], person, ollama_url, prompt_base,
+                                         roles=roles, person_email=person_email, debug=debug)
+
+    # Thread mit 2+ Mails
+    detected_addressing, is_self_sent = _detect_addressing_for_thread(thread, person, person_email)
+    if debug is not None:
+        debug["detected_addressing"] = detected_addressing
+        debug["is_self_sent"] = is_self_sent
+        debug["thread_size"] = len(thread)
+
+    # Neueste Mail als Referenz fuer Fallback
+    newest = thread[-1]
+
+    email_text = format_thread_for_llm(thread)
+    raw_excerpt = _compact_excerpt(newest.get("body") or "")
+
+    # 1) Erster Versuch
+    try:
+        stage0 = {} if debug is not None else None
+        out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base,
+                                        roles=roles, debug=stage0, num_ctx=65536)
+        if debug is not None:
+            debug['stage0'] = stage0
+    except Exception as e:
+        if debug is not None:
+            debug['final_status'] = 'FALLBACK'
+            debug['fallback_reason'] = f'Exception: {e}'
+        return _make_fallback_block(newest, person, f"Exception: {e}")
+
+    if not (out0 or "").strip():
+        if debug is not None:
+            debug['final_status'] = 'FALLBACK'
+            debug['fallback_reason'] = 'leere Antwort'
+        return _make_fallback_block(newest, person, "leere Antwort")
+
+    block0 = _extract_marked_block(out0)
+    parsed0 = _parse_llm_summary_block(block0)
+    ok0, _errs0 = _validate_parsed_summary(parsed0)
+    if debug is not None:
+        debug['validate0_ok'] = bool(ok0)
+        debug['validate0_errors'] = list(_errs0)
+
+    if ok0:
+        if debug is not None:
+            debug['final_status'] = 'OK'
+        return _canonical_block_from_parsed(parsed0, newest, person, status="OK", raw_excerpt=raw_excerpt,
+                                            person_email=person_email, detected_addressing=detected_addressing,
+                                            is_self_sent=is_self_sent, thread_size=len(thread))
+
+    # 2) Repair-Pass
+    try:
+        stage1 = {} if debug is not None else None
+        repaired = _repair_summary_via_ollama(model, person, email_text, out0, ollama_url, roles=roles, debug=stage1)
+        if debug is not None:
+            debug['stage1'] = stage1
+        block1 = _extract_marked_block(repaired)
+        parsed1 = _parse_llm_summary_block(block1)
+        ok1, _errs1 = _validate_parsed_summary(parsed1)
+        if debug is not None:
+            debug['validate1_ok'] = bool(ok1)
+            debug['validate1_errors'] = list(_errs1)
+        if ok1:
+            if debug is not None:
+                debug['final_status'] = 'REPAIRED'
+            return _canonical_block_from_parsed(parsed1, newest, person, status="REPAIRED", raw_excerpt=raw_excerpt,
+                                                person_email=person_email, detected_addressing=detected_addressing,
+                                                is_self_sent=is_self_sent, thread_size=len(thread))
+    except Exception as e:
+        if debug is not None:
+            debug['repair_exception'] = str(e)
+        log.debug("Repair-Pass fehlgeschlagen: %s", e)
+
+    if debug is not None:
+        debug['final_status'] = 'FALLBACK'
+        debug['fallback_reason'] = 'Repair gescheitert / unparsebar'
+    return _make_fallback_block(newest, person, "Repair gescheitert / unparsebar")

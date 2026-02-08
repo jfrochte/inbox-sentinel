@@ -20,6 +20,7 @@ import imaplib
 import email
 import re
 from datetime import datetime, timedelta
+from email.utils import parsedate_to_datetime
 
 # tqdm ist optional: wenn installiert, gibt es Fortschrittsbalken.
 try:
@@ -133,6 +134,20 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
             to_header = decode_mime_words(message.get("to"))
             cc_header = decode_mime_words(message.get("cc"))
 
+            # Threading-Header extrahieren
+            message_id = message.get("message-id") or ""
+            in_reply_to = message.get("in-reply-to") or ""
+            references_raw = message.get("references") or ""
+            references = references_raw.split() if references_raw.strip() else []
+
+            date_iso = ""
+            date_raw = message.get("date")
+            if date_raw:
+                try:
+                    date_iso = parsedate_to_datetime(date_raw).isoformat()
+                except Exception:
+                    pass
+
             body = extract_best_body_text(message)
 
             emails.append({
@@ -142,6 +157,10 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
                 "from_addr": from_addr,
                 "to": to_header,
                 "cc": cc_header,
+                "message_id": message_id.strip(),
+                "in_reply_to": in_reply_to.strip(),
+                "references": references,
+                "date": date_iso,
                 "body": body,
             })
 

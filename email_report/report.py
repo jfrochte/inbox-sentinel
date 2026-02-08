@@ -86,6 +86,7 @@ def _parse_llm_summary_block(block: str) -> dict:
         "actions": "",
         "summary": "",
         "raw_excerpt": "",
+        "thread_size": 1,
     }
 
     # "E-Mail Nummer: X" rauswerfen (kommt aus sort_summaries_by_priority)
@@ -104,6 +105,7 @@ def _parse_llm_summary_block(block: str) -> dict:
         ("asked", re.compile(rf"(?i)\b(asked\s*directly|asked-directly|asked|direkt\s*angesprochen){sep}")),
         ("priority", re.compile(rf"(?i)\b(priority|priorit[aä]t|prio){sep}")),
         ("status", re.compile(rf"(?i)\b(llm\s*status|llm-status|status){sep}")),
+        ("thread_size", re.compile(rf"(?i)\b(thread[\s-]?size|thread[\s-]?groesse){sep}")),
         ("raw_excerpt", re.compile(rf"(?i)\b(raw\s*excerpt|raw-excerpt|excerpt|auszug){sep}")),
         ("summary", re.compile(rf"(?i)\b(summary|zusammenfassung){sep}")),
         # Actions for <Person> ist haeufig, aber variabel
@@ -147,6 +149,12 @@ def _parse_llm_summary_block(block: str) -> dict:
 
         if key == "status":
             out["status"] = v.strip().upper()
+            return
+
+        if key == "thread_size":
+            m = re.search(r"(\d+)", v)
+            if m:
+                out["thread_size"] = int(m.group(1))
             return
 
         if key in ("actions", "summary", "context", "raw_excerpt"):
@@ -238,6 +246,9 @@ def _parse_llm_summary_block(block: str) -> dict:
             elif k in ("llm-status", "llm status", "status"):
                 set_value("status", val)
                 current_section = None
+            elif k in ("thread-size", "thread size", "thread-groesse", "thread groesse"):
+                set_value("thread_size", val)
+                current_section = None
             elif k in ("raw-excerpt", "raw excerpt", "excerpt", "auszug"):
                 set_value("raw_excerpt", val)
                 current_section = "raw_excerpt"
@@ -297,7 +308,7 @@ def summaries_to_html_pre(sorted_text: str) -> str:
     )
 
 
-def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False) -> str:
+def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False, total_emails: int | None = None) -> str:
     """
     Baut eine besser scanbare HTML-Mail (Kartenansicht).
     Hinweis: Der "Schnellblick" wurde bewusst entfernt.
@@ -355,7 +366,10 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
             parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Anzahl Mails: {reported}</div>")
             parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">OK: {status_counts['OK']} | Repaired: {status_counts['REPAIRED']} | Fallback: {status_counts['FALLBACK']}</div>")
         else:
-            parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Abgerufen: {expected_count} | Im Report: {reported}</div>")
+            if total_emails is not None and total_emails != expected_count:
+                parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Abgerufen: {total_emails} | Threads: {expected_count} | Im Report: {reported}</div>")
+            else:
+                parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Abgerufen: {expected_count} | Im Report: {reported}</div>")
             parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">OK: {status_counts['OK']} | Repaired: {status_counts['REPAIRED']} | Fallback: {status_counts['FALLBACK']}</div>")
             if expected_count != reported:
                 parts.append("<div style=\"margin-top:10px;padding:10px;border-radius:10px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:12px;\"><b>WARNUNG:</b> Es fehlen Eintraege im Report. Bitte Log/Raw ansehen.</div>")
@@ -389,6 +403,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         context = (it.get("context") or "").strip()
         status = (it.get("status") or "OK").strip().upper()
         raw_excerpt = (it.get("raw_excerpt") or "").strip()
+        thread_size = int(it.get("thread_size", 1) or 1)
 
         parts.append("<tr><td style=\"padding-bottom:10px;\">")
         parts.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
@@ -398,6 +413,12 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         parts.append("<div style=\"display:flex;align-items:center;gap:10px;\">")
         parts.append(prio_badge(p))
         parts.append(category_badge(cat))
+        if thread_size > 1:
+            parts.append(
+                f"<span style=\"display:inline-block;padding:2px 8px;border-radius:999px;"
+                f"background:#e0e7ff;color:#3730a3;font-size:12px;font-weight:700;margin-left:4px;\">"
+                f"Thread ({thread_size})</span>"
+            )
         parts.append(f"<div style=\"font-size:15px;font-weight:800;color:#111827;\">{subj}</div>")
         parts.append("</div>")
 
@@ -449,7 +470,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
     return "".join(parts)
 
 
-def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False) -> str:
+def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False, total_emails: int | None = None) -> str:
     """
     Default: Kartenansicht.
     Fallback: setze ENV EMAIL_REPORT_HTML_PRE=1 fuer den alten <pre>-Output.
@@ -457,4 +478,4 @@ def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expec
     use_pre = os.environ.get("EMAIL_REPORT_HTML_PRE", "0").strip().lower() in ("1", "true", "yes", "on")
     if use_pre:
         return summaries_to_html_pre(sorted_text)
-    return summaries_to_html_cards(sorted_text, title=title, expected_count=expected_count, auto_sort=auto_sort)
+    return summaries_to_html_cards(sorted_text, title=title, expected_count=expected_count, auto_sort=auto_sort, total_emails=total_emails)
