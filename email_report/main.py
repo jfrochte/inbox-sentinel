@@ -194,7 +194,7 @@ def main():
                 'ts': datetime.now().isoformat(timespec='seconds'),
             }
 
-        final_block = _analyze_email_guaranteed(cfg.model, e, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, debug=dbg)
+        final_block = _analyze_email_guaranteed(cfg.model, e, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, debug=dbg)
 
         if debug_log and debug_file and dbg is not None:
             # Schneller Hinweis, wenn "response" fehlt und deshalb frueher alles leer war.

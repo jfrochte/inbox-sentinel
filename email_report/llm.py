@@ -31,6 +31,68 @@ ALLOWED_ASKED = {"YES", "NO"}
 ALLOWED_STATUS = {"OK", "REPAIRED", "FALLBACK"}
 ALLOWED_CATEGORY = {"SPAM", "PHISHING", "FYI", "ACTIONABLE"}
 
+_LIST_KEYWORDS = re.compile(
+    r"unsubscribe|abbestellen|newsletter|mailing[\s-]?list|to the list",
+    re.IGNORECASE,
+)
+_LIST_ADDR_PREFIXES = re.compile(
+    r"\b(all|staff|info|team|everyone|gruppe|verteiler)@",
+    re.IGNORECASE,
+)
+_GROUP_SALUTATION = re.compile(
+    r"(?i)\b(hallo zusammen|liebe alle|bitte alle|dear all|hi all|hi everyone|hello everyone)",
+)
+
+
+# ============================================================
+# Deterministische Addressing-Erkennung
+# ============================================================
+def _person_in_header(header: str, person: str, person_email: str) -> bool:
+    """Prueft ob Name (Vor-/Nachname, case-insensitive) oder E-Mail im Header vorkommt."""
+    if not header:
+        return False
+    h = header.lower()
+    if person_email and person_email.lower() in h:
+        return True
+    if person:
+        parts = person.strip().split()
+        for part in parts:
+            if len(part) >= 2 and part.lower() in h:
+                return True
+    return False
+
+
+def _detect_addressing(email_obj: dict, person: str, person_email: str) -> tuple:
+    """Deterministische Addressing-Erkennung. Returns (addressing, is_self_sent)."""
+    from_hdr = (email_obj.get("from") or email_obj.get("from_addr") or "").strip()
+    to_hdr = (email_obj.get("to") or "").strip()
+    cc_hdr = (email_obj.get("cc") or "").strip()
+    body = (email_obj.get("body") or "").strip()
+
+    # 1) Self-sent: person_email in From
+    if person_email and person_email.lower() in from_hdr.lower():
+        return "DIRECT", True
+
+    # 2) Person in To -> DIRECT
+    if _person_in_header(to_hdr, person, person_email):
+        return "DIRECT", False
+
+    # 3) Person in Cc -> CC
+    if _person_in_header(cc_hdr, person, person_email):
+        return "CC", False
+
+    # 4) LIST indicators
+    all_headers = f"{to_hdr} {cc_hdr}"
+    if _LIST_KEYWORDS.search(body) or _LIST_ADDR_PREFIXES.search(all_headers):
+        return "LIST", False
+
+    # 5) Group salutation in body (first 500 chars)
+    if _GROUP_SALUTATION.search(body[:500]):
+        return "GROUP", False
+
+    # 6) Fallback
+    return "UNKNOWN", False
+
 
 # ============================================================
 # LLM-Antwort Extraktion
@@ -86,24 +148,25 @@ def _extract_llm_text_from_json(data):
 # ============================================================
 # LLM Analyse via Ollama
 # ============================================================
-def _build_user_context(person: str, roles: str = "") -> str:
+def _build_user_context(person: str) -> str:
     """Baut den User-Kontext-Block, der vor dem Prompt eingefuegt wird."""
     lines = [
         f"You are working for {person}.",
         f"People may address {person} by first name, last name, or variations.",
         f"Always judge relevance and priority from {person}'s perspective.",
     ]
-    if roles:
-        lines.append(f"\n{person}'s roles and responsibilities: {roles}")
     return "\n".join(lines) + "\n\n"
 
 
 def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None) -> str:
     headers = {"Content-Type": "application/json"}
 
-    # User-Kontext + Platzhalter ersetzen (falls im prompt.txt vorhanden)
-    user_context = _build_user_context(person, roles)
-    base = prompt_base.format(person=person)
+    # Roles-String aufbereiten: wenn gefuellt -> formatierte Zeile, sonst leer
+    roles_line = f"\nRoles and responsibilities: {roles}\n" if roles else ""
+
+    # User-Kontext + Platzhalter ersetzen
+    user_context = _build_user_context(person)
+    base = prompt_base.format(person=person, roles=roles_line)
 
     prompt = (
         user_context
@@ -254,8 +317,10 @@ def _validate_parsed_summary(d):
     return (len(errs) == 0), errs
 
 
-def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, status: str = "OK", raw_excerpt: str = "") -> str:
-    """Erzeugt einen sauberen Block (ein Label pro Zeile), egal wie das LLM antwortet."""
+def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, status: str = "OK", raw_excerpt: str = "",
+                                 person_email: str = "", detected_addressing: str = "", is_self_sent: bool = False) -> str:
+    """Erzeugt einen sauberen Block (ein Label pro Zeile), egal wie das LLM antwortet.
+    Wendet danach deterministische Regeln an (Addressing-Override, Self-Sent, SPAM/PHISHING, LIST-Cap)."""
     subj = (parsed.get("subject") or "").strip() or (email_obj.get("subject") or "").strip() or "(ohne Betreff)"
     sender = (parsed.get("sender") or "").strip() or (email_obj.get("from") or "").strip() or "(unbekannt)"
 
@@ -281,6 +346,29 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
     context = (parsed.get("context") or "").strip()
     actions = (parsed.get("actions") or "").strip() or "Keine."
     summary = (parsed.get("summary") or "").strip() or "Unklar. Bitte Original-Mail pruefen."
+
+    # --- Deterministische Post-Processing Regeln ---
+
+    # Regel: Code-erkanntes Addressing ueberschreibt LLM-Addressing
+    if detected_addressing and detected_addressing in ALLOWED_ADDRESSING:
+        addressing = detected_addressing
+
+    # Regel: Self-sent (Prompt Z.37): Priority=5, Asked=NO, Actions="Keine."
+    if is_self_sent:
+        prio = 5
+        asked = "NO"
+        actions = "Keine."
+
+    # Regel: SPAM/PHISHING (Prompt Z.31-32): Priority=5, Actions="Keine."
+    if category in ("SPAM", "PHISHING"):
+        prio = 5
+        actions = "Keine."
+
+    # Regel: LIST + Asked NO (Prompt Z.62): Priority darf nicht 1 sein -> cap auf 2
+    if addressing == "LIST" and asked == "NO" and prio == 1:
+        prio = 2
+
+    # --- Ende Post-Processing ---
 
     # Excerpt nur bei Bedarf: Repair/Fallback oder P1/P2
     show_excerpt = bool(raw_excerpt) and (status in ("REPAIRED", "FALLBACK") or prio in (1, 2))
@@ -344,7 +432,7 @@ def _ollama_generate(model: str, prompt: str, ollama_url: str, num_predict: int 
 
 def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_output: str, ollama_url: str, roles: str = "", debug: dict | None = None) -> str:
     """Zweiter Pass: nur Format-Repair. Sehr strikt, damit Parser wieder sauber arbeitet."""
-    user_context = _build_user_context(person, roles)
+    user_context = _build_user_context(person)
     repair_prompt = (
         user_context
         + "Du bist ein strikter Formatter. Antworte NUR mit dem Block zwischen <<BEGIN>> und <<END>>.\n"
@@ -375,8 +463,14 @@ def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_
     return _ollama_generate(model, repair_prompt, ollama_url, num_predict=4000, debug=debug)
 
 
-def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None) -> str:
+def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, roles: str = "", person_email: str = "", debug: dict | None = None) -> str:
     """Hauptlogik: garantiert pro E-Mail genau einen gueltigen Block."""
+    # Deterministische Addressing-Erkennung
+    detected_addressing, is_self_sent = _detect_addressing(email_obj, person, person_email)
+    if debug is not None:
+        debug["detected_addressing"] = detected_addressing
+        debug["is_self_sent"] = is_self_sent
+
     # Mailtext fuer LLM: Header + Body
     mail_text = []
     mail_text.append(f"Subject: {email_obj.get('subject','')}")
@@ -418,7 +512,8 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
     if ok0:
         if debug is not None:
             debug['final_status'] = 'OK'
-        return _canonical_block_from_parsed(parsed0, email_obj, person, status="OK", raw_excerpt=raw_excerpt)
+        return _canonical_block_from_parsed(parsed0, email_obj, person, status="OK", raw_excerpt=raw_excerpt,
+                                                   person_email=person_email, detected_addressing=detected_addressing, is_self_sent=is_self_sent)
 
     # 2) Repair-Pass
     try:
@@ -435,7 +530,8 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
         if ok1:
             if debug is not None:
                 debug['final_status'] = 'REPAIRED'
-            return _canonical_block_from_parsed(parsed1, email_obj, person, status="REPAIRED", raw_excerpt=raw_excerpt)
+            return _canonical_block_from_parsed(parsed1, email_obj, person, status="REPAIRED", raw_excerpt=raw_excerpt,
+                                                       person_email=person_email, detected_addressing=detected_addressing, is_self_sent=is_self_sent)
     except Exception as e:
         if debug is not None:
             debug['repair_exception'] = str(e)
