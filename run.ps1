@@ -3,13 +3,12 @@
 # - laedt .env
 # - aktiviert .venv
 # - prueft ob Ollama erreichbar ist (und versucht es zu starten)
-# - fuehrt email_report.py aus
+# - fuehrt email_report aus
 # =========================================
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
-$Script   = if ($args.Count -gt 0) { $args[0] } else { "email_report.py" }
 $VenvDir  = ".venv"
 $EnvFile  = ".env"
 
@@ -107,12 +106,7 @@ if (-not (Test-Ollama)) {
 }
 
 # --- Skript starten ---
-if (-not (Test-Path $Script)) {
-    Write-Host "ERROR: Script not found: $Script" -ForegroundColor Red
-    exit 1
-}
-
 Write-Host "==> Ollama OK at $BaseUrl"
-Write-Host "==> Running: $VenvPython $Script"
-& $VenvPython $Script
+Write-Host "==> Running: $VenvPython -m email_report"
+& $VenvPython -m email_report
 exit $LASTEXITCODE

@@ -1,7 +1,6 @@
 #!/bin/sh
 set -eu
 
-SCRIPT="${1:-email_report.py}"
 VENV_DIR=".venv"
 ENV_FILE=".env"
 
@@ -114,11 +113,6 @@ if ! ollama_reachable; then
   exit 1
 fi
 
-if [ ! -f "$SCRIPT" ]; then
-  echo "ERROR: Script not found: $SCRIPT"
-  exit 1
-fi
-
 echo "==> Ollama OK at ${BASE_URL}"
-echo "==> Running: python ${SCRIPT}"
-python "$SCRIPT"
+echo "==> Running: python -m email_report"
+python -m email_report
