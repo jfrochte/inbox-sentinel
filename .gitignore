@@ -8,3 +8,8 @@ venv/
 .ipynb_checkpoints/
 profiles/*.json
 
+# Report temp files (may contain email content)
+zusammenfassung_*.txt
+zusammenfassung-sortiert_*.txt
+debug_*.jsonl
+
