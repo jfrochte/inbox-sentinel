@@ -50,7 +50,7 @@ inbox-sentinel uses [Ollama](https://ollama.com/) to run a language model locall
 **Download a model:**
 
 ```bash
-ollama pull qwen2.5:7b-instruct-q8_0
+ollama pull gpt-os-20b
 ```
 
 This downloads ~8 GB. Other instruction-tuned models also work (e.g. `llama3.1:8b-instruct-q8_0`), but the prompt is optimized for `qwen2.5`. Ollama must be running before you start inbox-sentinel (the `run.sh`/`run.ps1` scripts will try to start it automatically).
@@ -189,7 +189,7 @@ inbox-sentinel nutzt [Ollama](https://ollama.com/), um ein Sprachmodell lokal au
 **Modell herunterladen:**
 
 ```bash
-ollama pull qwen2.5:7b-instruct-q8_0
+ollama pull gpt-os-20b
 ```
 
 Das laedt ca. 8 GB herunter. Andere instruction-tuned Modelle funktionieren ebenfalls (z.B. `llama3.1:8b-instruct-q8_0`), aber der Prompt ist fuer `qwen2.5` optimiert. Ollama muss laufen bevor inbox-sentinel gestartet wird (die `run.sh`/`run.ps1`-Skripte versuchen es automatisch zu starten).

@@ -38,7 +38,7 @@ DEFAULT_USERNAME = ""
 DEFAULT_NAME = ""
 
 # LLM/Ollama Defaults
-DEFAULT_MODEL = "qwen2.5:7b-instruct-q8_0"
+DEFAULT_MODEL = "gpt-os-20b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 
 # Funktions-Defaults
