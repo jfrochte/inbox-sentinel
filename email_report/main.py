@@ -58,6 +58,7 @@ from email_report.llm import _analyze_thread_guaranteed
 from email_report.threading import group_into_threads
 from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block
 from email_report.smtp_client import send_email_html
+from email_report.drafts import generate_draft_text, build_draft_message, imap_save_drafts
 
 
 # ============================================================
@@ -105,6 +106,15 @@ def main():
         prompt_base = load_prompt_file(cfg.prompt_file)
     except FileNotFoundError:
         raise SystemExit(f"Prompt-Datei nicht gefunden: {cfg.prompt_file}")
+
+    # --- Draft-Prompt laden (wenn auto_draft aktiv) ---
+    draft_prompt_base = None
+    if cfg.auto_draft:
+        try:
+            draft_prompt_base = load_prompt_file("draft_prompt.txt")
+        except FileNotFoundError:
+            log.warning("draft_prompt.txt nicht gefunden - Auto-Draft deaktiviert.")
+            cfg.auto_draft = False
 
     # --- Profil speichern (nur wenn etwas geaendert wurde) ---
     if edited:
@@ -171,6 +181,8 @@ def main():
         iterator = tqdm(threads, desc="Verarbeite Threads")
 
     sort_moves = []  # Sammelt {"uid": ..., "folder": ...} fuer Auto-Sort
+    draft_queue = []  # Sammelt (subject_log, Message) fuer IMAP APPEND
+    draft_stats = {"generated": 0, "skipped": 0, "failed": 0}
 
     # --- Verarbeitung: pro Thread LLM Summary erzeugen ---
     for idx_thread, thread in enumerate(iterator, start=1):
@@ -202,14 +214,51 @@ def main():
                     dbg['hint'] = 'Server liefert kein Feld "response" (sondern z.B. message/choices). Der Parser liest das jetzt; falls weiterhin leer: resp_text_head pruefen.'
             write_jsonl(debug_file, dbg)
 
-        # Category aus final_block extrahieren fuer Auto-Sort
-        # ALLE UIDs eines Threads bekommen die gleiche Kategorie
+        # parsed_block einmalig berechnen (wird von auto_sort UND auto_draft genutzt)
+        parsed_block = _parse_llm_summary_block(final_block)
+
+        # --- Auto-Sort ---
         if cfg.auto_sort and thread_uids:
-            parsed_block = _parse_llm_summary_block(final_block)
             cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
             if cat in DEFAULT_SORT_FOLDERS:
                 for uid in thread_uids:
                     sort_moves.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat]})
+
+        # --- Auto-Draft ---
+        if cfg.auto_draft and draft_prompt_base:
+            cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
+            actions_raw = (parsed_block.get("actions") or "").strip()
+            actions_low = actions_raw.lower()
+            newest_from = (newest.get("from") or "").lower()
+            is_self_sent = bool(cfg.from_email and cfg.from_email.lower() in newest_from)
+
+            # Skip-Bedingungen: nicht-ACTIONABLE, self-sent, keine echten Actions
+            if cat in ("SPAM", "PHISHING", "FYI"):
+                draft_stats["skipped"] += 1
+            elif is_self_sent:
+                draft_stats["skipped"] += 1
+            elif not actions_raw or actions_low in ("keine.", "keine", "none", "none.", "n/a"):
+                draft_stats["skipped"] += 1
+            else:
+                try:
+                    draft_text = generate_draft_text(
+                        cfg.model, thread, cfg.name, cfg.ollama_url,
+                        draft_prompt_base, parsed_block, roles=cfg.roles,
+                    )
+                    if draft_text:
+                        draft_msg = build_draft_message(thread, draft_text, cfg.from_email, cfg.name)
+                        subj_log = (parsed_block.get("subject") or newest.get("subject") or "?")[:80]
+                        draft_queue.append((subj_log, draft_msg))
+                        draft_stats["generated"] += 1
+                        final_block += "\nDraft-Status: erstellt\n"
+                    else:
+                        draft_stats["failed"] += 1
+                        log.warning("Draft-LLM lieferte leeren Text fuer: %s",
+                                    (newest.get("subject") or "?")[:80])
+                except Exception as e:
+                    draft_stats["failed"] += 1
+                    log.warning("Draft-Fehler fuer '%s': %s",
+                                (newest.get("subject") or "?")[:80], e)
 
         append_secure(summaries_file, final_block)
         append_secure(summaries_file, "\n\n-----------------------\n\n")
@@ -222,7 +271,7 @@ def main():
         sorted_text = f.read()
 
     subject = f"Daily Email Report ({start_day.isoformat()} bis {end_day.isoformat()})"
-    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(threads), auto_sort=cfg.auto_sort, total_emails=total_emails)
+    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(threads), auto_sort=cfg.auto_sort, total_emails=total_emails, draft_stats=draft_stats if cfg.auto_draft else None)
 
     # --- Versenden ---
     sent_ok = False
@@ -241,6 +290,26 @@ def main():
         )
         sent_ok = True
     finally:
+        # --- Auto-Draft: Drafts in IMAP speichern (VOR Auto-Sort) ---
+        if sent_ok and cfg.auto_draft and draft_queue:
+            log.info("Auto-Draft: %d Entwurf/Entwuerfe zum Speichern.", len(draft_queue))
+            try:
+                draft_result = imap_save_drafts(
+                    username=cfg.username,
+                    password=cfg.password,
+                    imap_server=cfg.imap_server,
+                    imap_port=cfg.imap_port,
+                    drafts_folder=cfg.drafts_folder,
+                    draft_messages=draft_queue,
+                )
+                log.info("Auto-Draft Ergebnis: %d gespeichert, %d fehlgeschlagen.",
+                         draft_result["saved"], draft_result["failed"])
+                if draft_result["errors"]:
+                    for err in draft_result["errors"]:
+                        log.warning("Auto-Draft Fehler: %s", err)
+            except Exception as e:
+                log.warning("Auto-Draft fehlgeschlagen: %s", e)
+
         # --- Auto-Sort: NACH dem Versand (Report hat Vorrang) ---
         if sent_ok and cfg.auto_sort and sort_moves:
             log.info("Auto-Sort: %d E-Mail(s) zum Verschieben.", len(sort_moves))

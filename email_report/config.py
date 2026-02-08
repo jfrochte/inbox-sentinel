@@ -113,6 +113,10 @@ class Config:
     # Auto-Sort: E-Mails nach LLM-Kategorie in IMAP-Unterordner verschieben
     auto_sort: bool = True
 
+    # Auto-Draft: Antwortentwuerfe fuer ACTIONABLE Mails per LLM generieren
+    auto_draft: bool = False
+    drafts_folder: str = "Drafts"
+
     # Diese Felder werden NICHT in Profilen gespeichert:
     password: str = ""
     report_dir: str = REPORT_DIR
