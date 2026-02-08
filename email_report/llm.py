@@ -159,7 +159,7 @@ def _build_user_context(person: str) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None, num_ctx: int = 32768) -> str:
+def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None, num_ctx: int = 32768, sender_context: str = "") -> str:
     headers = {"Content-Type": "application/json"}
 
     # Roles-String aufbereiten: wenn gefuellt -> formatierte Zeile, sonst leer
@@ -171,6 +171,7 @@ def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_ur
 
     prompt = (
         user_context
+        + sender_context
         + base
         + "\n--- EMAIL START ---\n"
         + email_text
@@ -469,7 +470,7 @@ def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_
     return _ollama_generate(model, repair_prompt, ollama_url, num_predict=4000, debug=debug)
 
 
-def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, roles: str = "", person_email: str = "", debug: dict | None = None) -> str:
+def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, roles: str = "", person_email: str = "", debug: dict | None = None, sender_context: str = "") -> str:
     """Hauptlogik: garantiert pro E-Mail genau einen gueltigen Block."""
     # Deterministische Addressing-Erkennung
     detected_addressing, is_self_sent = _detect_addressing(email_obj, person, person_email)
@@ -493,7 +494,7 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
     # 1) erster Versuch
     try:
         stage0 = {} if debug is not None else None
-        out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base, roles=roles, debug=stage0)
+        out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base, roles=roles, debug=stage0, sender_context=sender_context)
         if debug is not None:
             debug['stage0'] = stage0
     except Exception as e:
@@ -592,11 +593,12 @@ def _detect_addressing_for_thread(thread: list[dict], person: str, person_email:
 
 def _analyze_thread_guaranteed(model: str, thread: list[dict], person: str, ollama_url: str,
                                prompt_base: str, roles: str = "", person_email: str = "",
-                               debug: dict | None = None) -> str:
+                               debug: dict | None = None, sender_context: str = "") -> str:
     """Thread-aware Analyse. Einzelne Mail delegiert an _analyze_email_guaranteed (zero regression)."""
     if len(thread) == 1:
         return _analyze_email_guaranteed(model, thread[0], person, ollama_url, prompt_base,
-                                         roles=roles, person_email=person_email, debug=debug)
+                                         roles=roles, person_email=person_email, debug=debug,
+                                         sender_context=sender_context)
 
     # Thread mit 2+ Mails
     detected_addressing, is_self_sent = _detect_addressing_for_thread(thread, person, person_email)
@@ -615,7 +617,8 @@ def _analyze_thread_guaranteed(model: str, thread: list[dict], person: str, olla
     try:
         stage0 = {} if debug is not None else None
         out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base,
-                                        roles=roles, debug=stage0, num_ctx=65536)
+                                        roles=roles, debug=stage0, num_ctx=65536,
+                                        sender_context=sender_context)
         if debug is not None:
             debug['stage0'] = stage0
     except Exception as e:

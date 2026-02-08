@@ -117,6 +117,9 @@ class Config:
     auto_draft: bool = False
     drafts_folder: str = "Drafts"
 
+    # Auto-Contacts: Kontakte automatisch aus E-Mails lernen
+    auto_contacts: bool = False
+
     # Diese Felder werden NICHT in Profilen gespeichert:
     password: str = ""
     report_dir: str = REPORT_DIR

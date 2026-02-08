@@ -59,6 +59,10 @@ from email_report.threading import group_into_threads
 from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block
 from email_report.smtp_client import send_email_html
 from email_report.drafts import generate_draft_text, build_draft_message, imap_save_drafts
+from email_report.contacts import (
+    load_contact, save_contact, format_contact_for_prompt,
+    merge_contact_update, extract_contact_info_via_llm,
+)
 
 
 # ============================================================
@@ -189,6 +193,16 @@ def main():
         newest = thread[-1]
         thread_uids = [e.get("uid") for e in thread if e.get("uid")]
 
+        # --- Punkt A: Kontakt laden (vor LLM-Analyse) ---
+        sender_context = ""
+        sender_addr = ""
+        if cfg.auto_contacts:
+            sender_addr = (newest.get("from_addr") or "").strip().lower()
+            is_self = bool(cfg.from_email and cfg.from_email.lower() == sender_addr)
+            if sender_addr and not is_self:
+                existing_contact = load_contact(sender_addr)
+                sender_context = format_contact_for_prompt(existing_contact)
+
         dbg = None
         if debug_log:
             dbg = {
@@ -204,7 +218,8 @@ def main():
                 'ts': datetime.now().isoformat(timespec='seconds'),
             }
 
-        final_block = _analyze_thread_guaranteed(cfg.model, thread, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, debug=dbg)
+        # --- Punkt B: sender_context an LLM-Analyse uebergeben ---
+        final_block = _analyze_thread_guaranteed(cfg.model, thread, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, debug=dbg, sender_context=sender_context)
 
         if debug_log and debug_file and dbg is not None:
             st0 = (dbg.get('stage0') or {})
@@ -241,9 +256,11 @@ def main():
                 draft_stats["skipped"] += 1
             else:
                 try:
+                    # --- Punkt C: sender_context an Draft uebergeben ---
                     draft_text = generate_draft_text(
                         cfg.model, thread, cfg.name, cfg.ollama_url,
                         draft_prompt_base, parsed_block, roles=cfg.roles,
+                        sender_context=sender_context,
                     )
                     if draft_text:
                         draft_msg = build_draft_message(thread, draft_text, cfg.from_email, cfg.name)
@@ -259,6 +276,21 @@ def main():
                     draft_stats["failed"] += 1
                     log.warning("Draft-Fehler fuer '%s': %s",
                                 (newest.get("subject") or "?")[:80], e)
+
+        # --- Punkt D: Kontakt per LLM aktualisieren ---
+        if cfg.auto_contacts and sender_addr:
+            try:
+                existing_contact = load_contact(sender_addr)
+                llm_extracted = extract_contact_info_via_llm(
+                    cfg.model, thread, cfg.name, cfg.ollama_url)
+                if llm_extracted:
+                    display_name = (newest.get("from") or "").strip()
+                    email_date = (newest.get("date") or "")
+                    updated = merge_contact_update(
+                        existing_contact, llm_extracted, sender_addr, display_name, email_date)
+                    save_contact(sender_addr, updated)
+            except Exception as e:
+                log.debug("Contact-Update fehlgeschlagen fuer %s: %s", sender_addr, e)
 
         append_secure(summaries_file, final_block)
         append_secure(summaries_file, "\n\n-----------------------\n\n")

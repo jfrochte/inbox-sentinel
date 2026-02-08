@@ -32,7 +32,8 @@ from email_report.threading import format_thread_for_llm, normalize_subject
 # 1) Draft-Text per LLM generieren
 # ============================================================
 def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url: str,
-                        draft_prompt_base: str, parsed_analysis: dict, roles: str = "") -> str:
+                        draft_prompt_base: str, parsed_analysis: dict, roles: str = "",
+                        sender_context: str = "") -> str:
     """
     Generiert einen Antwort-Entwurf per LLM.
 
@@ -48,7 +49,7 @@ def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url:
 
     roles_line = f"\nRoles and responsibilities: {roles}\n" if roles else ""
 
-    prompt = draft_prompt_base.format(
+    prompt = sender_context + draft_prompt_base.format(
         person=person,
         roles=roles_line,
         subject=subject,

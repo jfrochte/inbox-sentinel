@@ -269,6 +269,10 @@ def prompt_all_settings(cfg: Config) -> Config:
     if auto_draft:
         drafts_folder = prompt_with_default("Drafts-Ordner (IMAP)", cfg.drafts_folder)
 
+    # Auto-Contacts
+    auto_contacts = prompt_bool_with_default(
+        "Auto-Contacts (Kontakte automatisch aus E-Mails lernen)", cfg.auto_contacts)
+
     # Aktualisierte Config zurueckgeben (Passwort und Debug-Felder bleiben unveraendert)
     cfg.prompt_file = prompt_file
     cfg.imap_server = imap_server
@@ -289,6 +293,7 @@ def prompt_all_settings(cfg: Config) -> Config:
     cfg.auto_sort = auto_sort
     cfg.auto_draft = auto_draft
     cfg.drafts_folder = drafts_folder
+    cfg.auto_contacts = auto_contacts
 
     return cfg
 
@@ -316,6 +321,7 @@ def print_config_summary(cfg: Config) -> None:
     print(f"  Auto-Draft: {cfg.auto_draft}")
     if cfg.auto_draft:
         print(f"  Drafts:     {cfg.drafts_folder}")
+    print(f"  Contacts:   {cfg.auto_contacts}")
     print("------------------------------")
 
 
@@ -398,5 +404,8 @@ def prompt_user_settings(cfg: Config) -> Config:
         "Auto-Draft (Antwortentwuerfe fuer ACTIONABLE Mails)", cfg.auto_draft)
     if cfg.auto_draft:
         cfg.drafts_folder = prompt_with_default("Drafts-Ordner (IMAP)", cfg.drafts_folder)
+
+    cfg.auto_contacts = prompt_bool_with_default(
+        "Auto-Contacts (Kontakte automatisch aus E-Mails lernen)", cfg.auto_contacts)
 
     return cfg
