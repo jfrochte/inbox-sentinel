@@ -169,7 +169,11 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
     2) Unterordner erstellen wenn noetig (mail.create)
     3) mail.uid('copy', uid, zielordner)
     4) mail.uid('store', uid, '+FLAGS', '(\\Deleted)')
-    5) mail.expunge()
+    5) UID EXPUNGE (nur unsere UIDs) oder Fallback auf regulaeres EXPUNGE
+
+    Sicherheit: Nutzt UID EXPUNGE (UIDPLUS, RFC 4315) wenn verfuegbar,
+    damit nur die von uns geflaggten Mails entfernt werden und keine
+    vorher schon als \\Deleted markierten Mails verloren gehen.
 
     Gibt {"moved": int, "failed": int, "errors": [str]} zurueck.
     """
@@ -181,6 +185,14 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
     mail = imaplib.IMAP4_SSL(imap_server, imap_port)
     try:
         mail.login(username, password)
+
+        # UIDPLUS-Faehigkeit pruefen (fuer sicheres UID EXPUNGE)
+        has_uidplus = False
+        try:
+            caps = mail.capabilities or ()
+            has_uidplus = b"UIDPLUS" in caps or "UIDPLUS" in caps
+        except Exception:
+            pass
 
         # Ordner-Separator erkennen (z.B. "/" oder ".")
         separator = "/"
@@ -227,6 +239,7 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
             created_folders.add(folder_name)
 
         # E-Mails verschieben
+        deleted_uids = []  # UIDs die wir als \Deleted markiert haben
         for move in moves:
             uid = move.get("uid", "")
             folder_name = move.get("folder", "")
@@ -234,17 +247,19 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
                 continue
 
             target = folder_name
+            uid_b = uid.encode() if isinstance(uid, str) else uid
 
             try:
                 # Copy to target folder
-                status, _ = mail.uid('copy', uid.encode() if isinstance(uid, str) else uid, target)
+                status, _ = mail.uid('copy', uid_b, target)
                 if status != "OK":
                     result["failed"] += 1
                     result["errors"].append(f"UID {uid}: copy nach {target} fehlgeschlagen")
                     continue
 
                 # Mark as deleted in source
-                mail.uid('store', uid.encode() if isinstance(uid, str) else uid, '+FLAGS', '(\\Deleted)')
+                mail.uid('store', uid_b, '+FLAGS', '(\\Deleted)')
+                deleted_uids.append(uid)
                 result["moved"] += 1
 
             except Exception as e:
@@ -252,11 +267,25 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
                 result["errors"].append(f"UID {uid}: {e}")
                 log.warning("Fehler beim Verschieben von UID %s nach %s: %s", uid, target, e)
 
-        # Expunge all deleted messages at once
-        try:
-            mail.expunge()
-        except Exception as e:
-            log.warning("Expunge fehlgeschlagen: %s", e)
+        # Expunge: nur unsere UIDs entfernen
+        if deleted_uids:
+            uid_set = ",".join(deleted_uids)
+            if has_uidplus:
+                try:
+                    mail.uid('expunge', uid_set)
+                except Exception as e:
+                    log.warning("UID EXPUNGE fehlgeschlagen, Fallback auf EXPUNGE: %s", e)
+                    try:
+                        mail.expunge()
+                    except Exception as e2:
+                        log.warning("Expunge fehlgeschlagen: %s", e2)
+            else:
+                log.info("Server hat kein UIDPLUS – nutze regulaeres EXPUNGE. "
+                         "Bereits vorher als Deleted markierte Mails koennten mit-entfernt werden.")
+                try:
+                    mail.expunge()
+                except Exception as e:
+                    log.warning("Expunge fehlgeschlagen: %s", e)
 
     except Exception as e:
         result["errors"].append(f"IMAP-Verbindungsfehler: {e}")
