@@ -86,14 +86,28 @@ def _extract_llm_text_from_json(data):
 # ============================================================
 # LLM Analyse via Ollama
 # ============================================================
-def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, debug: dict | None = None) -> str:
+def _build_user_context(person: str, roles: str = "") -> str:
+    """Baut den User-Kontext-Block, der vor dem Prompt eingefuegt wird."""
+    lines = [
+        f"You are working for {person}.",
+        f"People may address {person} by first name, last name, or variations.",
+        f"Always judge relevance and priority from {person}'s perspective.",
+    ]
+    if roles:
+        lines.append(f"\n{person}'s roles and responsibilities: {roles}")
+    return "\n".join(lines) + "\n\n"
+
+
+def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None) -> str:
     headers = {"Content-Type": "application/json"}
 
-    # Platzhalter ersetzen (falls im prompt.txt vorhanden)
+    # User-Kontext + Platzhalter ersetzen (falls im prompt.txt vorhanden)
+    user_context = _build_user_context(person, roles)
     base = prompt_base.format(person=person)
 
     prompt = (
-        base
+        user_context
+        + base
         + "\n--- EMAIL START ---\n"
         + email_text
     )
@@ -328,10 +342,12 @@ def _ollama_generate(model: str, prompt: str, ollama_url: str, num_predict: int 
     return (text or "").strip()
 
 
-def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_output: str, ollama_url: str, debug: dict | None = None) -> str:
+def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_output: str, ollama_url: str, roles: str = "", debug: dict | None = None) -> str:
     """Zweiter Pass: nur Format-Repair. Sehr strikt, damit Parser wieder sauber arbeitet."""
+    user_context = _build_user_context(person, roles)
     repair_prompt = (
-        "Du bist ein strikter Formatter. Antworte NUR mit dem Block zwischen <<BEGIN>> und <<END>>.\n"
+        user_context
+        + "Du bist ein strikter Formatter. Antworte NUR mit dem Block zwischen <<BEGIN>> und <<END>>.\n"
         "Keine Erklaerungen, kein Markdown, keine Zusatzzeilen.\n\n"
         "Format (alle Labels muessen genau einmal vorkommen):\n"
         f"<<BEGIN>>\n"
@@ -359,7 +375,7 @@ def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_
     return _ollama_generate(model, repair_prompt, ollama_url, num_predict=4000, debug=debug)
 
 
-def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, debug: dict | None = None) -> str:
+def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None) -> str:
     """Hauptlogik: garantiert pro E-Mail genau einen gueltigen Block."""
     # Mailtext fuer LLM: Header + Body
     mail_text = []
@@ -377,7 +393,7 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
     # 1) erster Versuch
     try:
         stage0 = {} if debug is not None else None
-        out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base, debug=stage0)
+        out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base, roles=roles, debug=stage0)
         if debug is not None:
             debug['stage0'] = stage0
     except Exception as e:
@@ -407,7 +423,7 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
     # 2) Repair-Pass
     try:
         stage1 = {} if debug is not None else None
-        repaired = _repair_summary_via_ollama(model, person, email_text, out0, ollama_url, debug=stage1)
+        repaired = _repair_summary_via_ollama(model, person, email_text, out0, ollama_url, roles=roles, debug=stage1)
         if debug is not None:
             debug['stage1'] = stage1
         block1 = _extract_marked_block(repaired)

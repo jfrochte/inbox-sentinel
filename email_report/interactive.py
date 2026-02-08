@@ -45,14 +45,22 @@ from email_report.organizations import ORGANIZATIONS, get_organization
 # ============================================================
 # Hilfsfunktionen: Prompts am Anfang (Enter -> Default)
 # ============================================================
-def prompt_with_default(label: str, default: str) -> str:
+def prompt_with_default(label: str, default: str, required: bool = False) -> str:
     """
     Fragt einen String ab.
     - Return druecken => Default
     - Leerzeichen werden getrimmt
+    - required=True: bei leerem Default wird wiederholt gefragt bis Eingabe erfolgt
     """
-    val = input(f"{label} [{default}]: ").strip()
-    return val if val else default
+    while True:
+        if default:
+            val = input(f"{label} [{default}]: ").strip()
+            return val if val else default
+        else:
+            val = input(f"{label}: ").strip()
+            if val or not required:
+                return val
+            print("  Pflichtfeld – bitte einen Wert eingeben.")
 
 
 def prompt_int_with_default(label: str, default: int) -> int:
@@ -227,20 +235,21 @@ def prompt_all_settings(cfg: Config) -> Config:
     prompt_file = prompt_with_default("Prompt-Datei", cfg.prompt_file)
 
     # Server und Ports
-    imap_server = prompt_with_default("IMAP Server", cfg.imap_server)
+    imap_server = prompt_with_default("IMAP Server", cfg.imap_server, required=True)
     imap_port = prompt_int_with_default("IMAP Port", cfg.imap_port)
 
-    smtp_server = prompt_with_default("SMTP Server", cfg.smtp_server)
+    smtp_server = prompt_with_default("SMTP Server", cfg.smtp_server, required=True)
     smtp_port = prompt_int_with_default("SMTP Port", cfg.smtp_port)
     smtp_ssl = prompt_bool_with_default("SMTP SSL/TLS verwenden", cfg.smtp_ssl)
 
     mailbox = prompt_with_default("Mailbox/Folder", cfg.mailbox)
 
     # Account / Absender
-    username = prompt_with_default("Username", cfg.username)
-    from_email = prompt_with_default("From E-Mail", cfg.from_email)
-    recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email)
-    name = prompt_with_default("Name", cfg.name)
+    username = prompt_with_default("Username", cfg.username, required=True)
+    from_email = prompt_with_default("From E-Mail", cfg.from_email, required=True)
+    recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email, required=True)
+    name = prompt_with_default("Name", cfg.name, required=True)
+    roles = prompt_with_default("Rollen/Zustaendigkeiten (optional, z.B. 'IT-Leitung, Projektmanager')", cfg.roles)
 
     # Datumsfenster
     days_back = prompt_int_with_default("Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
@@ -265,6 +274,7 @@ def prompt_all_settings(cfg: Config) -> Config:
     cfg.from_email = from_email
     cfg.recipient_email = recipient_email
     cfg.name = name
+    cfg.roles = roles
     cfg.days_back = days_back
     cfg.use_sentdate = use_sentdate
     cfg.ollama_url = ollama_url
@@ -286,6 +296,8 @@ def print_config_summary(cfg: Config) -> None:
     print(f"  Von:        {cfg.from_email}")
     print(f"  An:         {cfg.recipient_email}")
     print(f"  Name:       {cfg.name}")
+    if cfg.roles:
+        print(f"  Rollen:     {cfg.roles}")
     print(f"  Mailbox:    {cfg.mailbox}")
     print(f"  Zeitraum:   {cfg.days_back} Tage zurueck")
     print(f"  LLM:        {cfg.model}")
@@ -355,10 +367,11 @@ def prompt_user_settings(cfg: Config) -> Config:
     """
     print("\nBenutzer-Einstellungen (Return nimmt jeweils Default):\n")
 
-    cfg.username = prompt_with_default("Username", cfg.username)
-    cfg.from_email = prompt_with_default("From E-Mail", cfg.from_email)
-    cfg.recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email)
-    cfg.name = prompt_with_default("Name", cfg.name)
+    cfg.username = prompt_with_default("Username", cfg.username, required=True)
+    cfg.from_email = prompt_with_default("From E-Mail", cfg.from_email, required=True)
+    cfg.recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email, required=True)
+    cfg.name = prompt_with_default("Name", cfg.name, required=True)
+    cfg.roles = prompt_with_default("Rollen/Zustaendigkeiten (optional, z.B. 'IT-Leitung, Projektmanager')", cfg.roles)
 
     cfg.prompt_file = prompt_with_default("Prompt-Datei", cfg.prompt_file)
     cfg.days_back = prompt_int_with_default("Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)

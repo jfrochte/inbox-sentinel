@@ -20,22 +20,22 @@ from dataclasses import dataclass, field, asdict
 
 
 # ============================================================
-# Defaults (Entwicklung, wie gewuenscht mit Olivia-Account)
+# Defaults
 # ============================================================
 # IMAP:
-DEFAULT_IMAP_SERVER = "mail.hs-bochum.de"
+DEFAULT_IMAP_SERVER = ""
 DEFAULT_IMAP_PORT = 993
 
 # SMTP:
-DEFAULT_SMTP_SERVER = "mail.hs-bochum.de"
+DEFAULT_SMTP_SERVER = ""
 DEFAULT_SMTP_PORT = 587
 DEFAULT_SMTP_SSL = False  # bei 465 typischerweise True
 
 # Account Defaults
-DEFAULT_FROM_EMAIL = "joerg.frochte@hs-bochum.de"
-DEFAULT_RECIPIENT_EMAIL = "joerg.frochte@hs-bochum.de"
-DEFAULT_USERNAME = "j10f01191"
-DEFAULT_NAME = "Jörg Frochte"
+DEFAULT_FROM_EMAIL = ""
+DEFAULT_RECIPIENT_EMAIL = ""
+DEFAULT_USERNAME = ""
+DEFAULT_NAME = ""
 
 # LLM/Ollama Defaults
 DEFAULT_MODEL = "qwen2.5:7b-instruct-q8_0"
@@ -93,6 +93,7 @@ class Config:
     from_email: str = DEFAULT_FROM_EMAIL
     recipient_email: str = DEFAULT_RECIPIENT_EMAIL
     name: str = DEFAULT_NAME
+    roles: str = ""
 
     # Mailbox
     mailbox: str = DEFAULT_MAILBOX
