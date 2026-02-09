@@ -67,7 +67,7 @@ def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url:
         "stream": False,
         "options": {
             "num_ctx": num_ctx,
-            "num_predict": 2000,
+            "num_predict": 4000,
         },
     }
 

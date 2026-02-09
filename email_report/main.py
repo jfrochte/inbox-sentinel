@@ -120,6 +120,15 @@ def main():
             log.warning("draft_prompt.txt nicht gefunden - Auto-Draft deaktiviert.")
             cfg.auto_draft = False
 
+    # --- Contact-Prompt laden (wenn auto_contacts aktiv) ---
+    contact_prompt_base = None
+    if cfg.auto_contacts:
+        try:
+            contact_prompt_base = load_prompt_file("contact_prompt.txt")
+        except FileNotFoundError:
+            log.warning("contact_prompt.txt nicht gefunden - Auto-Contacts deaktiviert.")
+            cfg.auto_contacts = False
+
     # --- Profil speichern (nur wenn etwas geaendert wurde) ---
     if edited:
         prompt_save_profile(cfg, default_name=profile_name)
@@ -284,7 +293,9 @@ def main():
             try:
                 existing_contact = load_contact(sender_addr)
                 llm_extracted = extract_contact_info_via_llm(
-                    cfg.model, thread, cfg.name, cfg.ollama_url)
+                    cfg.model, thread, cfg.name, cfg.ollama_url,
+                    prompt_base=contact_prompt_base,
+                    existing_contact=existing_contact)
                 if llm_extracted:
                     display_name = (newest.get("from") or "").strip()
                     email_date = (newest.get("date") or "")

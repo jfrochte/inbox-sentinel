@@ -36,7 +36,7 @@ _EMPTY_CONTACT = {
     "role_or_title": {"value": "", "updated": ""},
     "relationship": {"value": "", "updated": ""},
     "communication_style": {"value": "", "updated": ""},
-    "topics": [],
+    "profile": {"value": "", "updated": ""},
     "last_contact": "",
     "contact_count": 0,
     "notes": "",
@@ -132,20 +132,12 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
                     entry += f" (as of {updated})"
                 lines.append(entry)
 
-    # Topics
-    topics = contact_data.get("topics") or []
-    if topics:
-        parts = []
-        for t in topics[-5:]:
-            if isinstance(t, dict):
-                topic = (t.get("topic") or "").strip()
-                date = (t.get("date") or "").strip()
-                if topic:
-                    parts.append(f"{topic} ({date})" if date else topic)
-            elif isinstance(t, str) and t.strip():
-                parts.append(t.strip())
-        if parts:
-            lines.append(f"Recent topics: {', '.join(parts)}")
+    # Profile
+    profile_field = contact_data.get("profile")
+    if isinstance(profile_field, dict):
+        profile_val = (profile_field.get("value") or "").strip()
+        if profile_val:
+            lines.append(f"Profile: {profile_val}")
 
     count = contact_data.get("contact_count", 0)
     if count:
@@ -183,32 +175,21 @@ def merge_contact_update(existing: dict | None, llm_extracted: dict,
     contact["email"] = email_addr
     if display_name:
         clean_name = _clean_display_name(display_name)
-        if clean_name and (not contact.get("name") or not contact["name"].strip()):
+        if clean_name:
             contact["name"] = clean_name
 
     # Felder mit value/updated
-    dated_fields = ["tone", "language", "role_or_title", "relationship", "communication_style"]
+    dated_fields = ["tone", "language", "role_or_title", "relationship",
+                    "communication_style", "profile"]
+    _SKIP_VALUES = {"nicht bestimmbar", "nicht beurteilbar", "unbekannt",
+                    "keine neuen informationen", "n/a", "-", "—"}
     for key in dated_fields:
         new_val = (llm_extracted.get(key) or "").strip()
-        if new_val:
+        if new_val and new_val.lower().rstrip(".") not in _SKIP_VALUES:
             if not isinstance(contact.get(key), dict):
                 contact[key] = {"value": "", "updated": ""}
             contact[key]["value"] = new_val
             contact[key]["updated"] = email_date
-
-    # Topics: neue anhaengen, letzte 10 behalten
-    new_topics = llm_extracted.get("topics") or []
-    existing_topics = contact.get("topics") or []
-    if not isinstance(existing_topics, list):
-        existing_topics = []
-    for t in new_topics:
-        if isinstance(t, str) and t.strip():
-            existing_topics.append({"topic": t.strip(), "date": email_date})
-        elif isinstance(t, dict) and (t.get("topic") or "").strip():
-            if not t.get("date"):
-                t["date"] = email_date
-            existing_topics.append(t)
-    contact["topics"] = existing_topics[-10:]
 
     # Zaehler und Datum
     contact["contact_count"] = (contact.get("contact_count") or 0) + 1
@@ -224,36 +205,155 @@ def merge_contact_update(existing: dict | None, llm_extracted: dict,
 # ============================================================
 # LLM-Extraktion
 # ============================================================
-_JSON_RE = re.compile(r"\{[^}]*\}", re.DOTALL)
+_BEGIN_RE = re.compile(r"<<\s*BEGIN\s*>>", re.IGNORECASE)
+_END_RE = re.compile(r"<<\s*END\s*>>", re.IGNORECASE)
+
+# Label-Mapping: Regex -> dict-Key (einzeilige Felder)
+_CONTACT_LABELS = [
+    ("tone", re.compile(r"(?i)^tone\s*[:=\-]\s*")),
+    ("language", re.compile(r"(?i)^language\s*[:=\-]\s*")),
+    ("role_or_title", re.compile(r"(?i)^role(?:[/\s\-]*title)?\s*[:=\-]\s*")),
+    ("relationship", re.compile(r"(?i)^relationship\s*[:=\-]\s*")),
+    ("communication_style", re.compile(r"(?i)^communication[\s\-]?style\s*[:=\-]\s*")),
+]
+
+# Profile ist ein mehrzeiliges Feld (letztes vor <<END>>)
+_PROFILE_RE = re.compile(r"(?i)^profile\s*[:=\-]\s*")
+
+
+def _parse_contact_block(text: str) -> dict:
+    """
+    Parst einen <<BEGIN>>...<<END>> Block in ein dict.
+    Profile ist mehrzeilig: alles nach 'Profile:' bis <<END>>.
+    """
+    # Block zwischen Markern extrahieren (Fallback: ganzer Text)
+    begin = _BEGIN_RE.search(text)
+    end = _END_RE.search(text)
+    if begin and end and end.start() > begin.end():
+        text = text[begin.end():end.start()]
+    elif begin:
+        text = text[begin.end():]
+
+    out = {}
+    profile_lines = []
+    in_profile = False
+
+    for line in text.splitlines():
+        stripped = line.strip()
+
+        # Wenn wir im Profile-Modus sind: pruefen ob ein neues Label kommt
+        if in_profile:
+            label_match = False
+            for key, regex in _CONTACT_LABELS:
+                if regex.match(stripped):
+                    label_match = True
+                    break
+            if label_match or _END_RE.match(stripped):
+                # Profile beenden, diese Zeile als normales Label weiterverarbeiten
+                in_profile = False
+            else:
+                # Zeile zum Profile hinzufuegen (Leerzeilen erhalten)
+                profile_lines.append(line.rstrip())
+                continue
+
+        if not stripped:
+            continue
+
+        # Profile-Start erkennen
+        m = _PROFILE_RE.match(stripped)
+        if m:
+            in_profile = True
+            rest = stripped[m.end():].strip()
+            if rest:
+                profile_lines.append(rest)
+            continue
+
+        # Einzeilige Felder
+        for key, regex in _CONTACT_LABELS:
+            m = regex.match(stripped)
+            if m:
+                val = stripped[m.end():].strip().strip('"').strip("'")
+                if val:
+                    out[key] = val
+                break
+
+    # Profile zusammenfuegen
+    profile_text = "\n".join(profile_lines).strip()
+    if profile_text:
+        out["profile"] = profile_text
+
+    return out
+
+
+def _format_email_section(thread: list[dict]) -> str:
+    """Formatiert Thread-Kontext fuer den Contact-Prompt (max 3 neueste Mails)."""
+    newest = thread[-1]
+    subject = (newest.get("subject") or "").strip()
+
+    recent = thread[-3:]
+    if len(recent) == 1:
+        header = f"Email subject: {subject}"
+        header += f"\nFrom: {(newest.get('from') or '').strip()}"
+        header += f"\nTo: {(newest.get('to') or '').strip()}"
+        if newest.get("cc"):
+            header += f"\nCc: {(newest.get('cc') or '').strip()}"
+        return f"{header}\nEmail body:\n{(newest.get('body') or '')[:3000]}"
+
+    parts = []
+    for i, e in enumerate(recent, start=1):
+        is_newest = (i == len(recent))
+        label = f"--- Mail {i}/{len(recent)}"
+        label += " [SENDER'S CURRENT MESSAGE] ---" if is_newest else " [EARLIER/QUOTED] ---"
+        parts.append(label)
+        parts.append(f"From: {(e.get('from') or '').strip()}")
+        parts.append(f"To: {(e.get('to') or '').strip()}")
+        if e.get("cc"):
+            parts.append(f"Cc: {(e.get('cc') or '').strip()}")
+        parts.append(f"Subject: {(e.get('subject') or '').strip()}")
+        if e.get("date"):
+            parts.append(f"Date: {e.get('date')}")
+        parts.append((e.get("body") or "")[:2000])
+        parts.append("")
+    return "\n".join(parts)
 
 
 def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
-                                  ollama_url: str) -> dict:
+                                  ollama_url: str, prompt_base: str = "",
+                                  existing_contact: dict | None = None) -> dict:
     """
-    Extrahiert Kontakt-Infos aus der neuesten Mail per LLM.
+    Extrahiert Kontakt-Infos aus dem Thread per LLM.
     Gibt ein dict mit Feldern zurueck, bei Fehler leeres dict.
     """
     newest = thread[-1]
-    body = (newest.get("body") or "")[:3000]
     sender = (newest.get("from") or "").strip()
-    subject = (newest.get("subject") or "").strip()
+    email_section = _format_email_section(thread)
 
-    prompt = f"""Analyze this email and extract information about the sender.
-You are working for {person}. The sender is: {sender}
+    prompt = prompt_base.replace("{person}", person)
 
-Email subject: {subject}
-Email body:
-{body}
+    # Bestehendes Profil + alle Felder mitgeben damit LLM bestehende Werte sehen kann
+    if existing_contact:
+        ep_lines = ["--- EXISTING PROFILE ---"]
+        field_labels = [
+            ("tone", "Tone"), ("language", "Language"),
+            ("role_or_title", "Role"), ("relationship", "Relationship"),
+            ("communication_style", "Communication-Style"),
+        ]
+        for key, label in field_labels:
+            fld = existing_contact.get(key)
+            if isinstance(fld, dict):
+                val = (fld.get("value") or "").strip()
+                if val:
+                    ep_lines.append(f"{label}: {val}")
+        pf = existing_contact.get("profile")
+        if isinstance(pf, dict):
+            pval = (pf.get("value") or "").strip()
+            if pval:
+                ep_lines.append(f"Profile:\n{pval}")
+        ep_lines.append("--- END EXISTING PROFILE ---")
+        if len(ep_lines) > 2:  # mehr als nur Rahmen
+            prompt += "\n" + "\n".join(ep_lines) + "\n"
 
-Return ONLY a JSON object with these fields (leave empty string if unknown):
-- "tone": How does the sender communicate? e.g. "formal, siezt", "informell, duzt", "neutral"
-- "language": Language of the email, e.g. "de", "en", "de+en gemischt"
-- "role_or_title": The sender's role or title. If not explicitly stated, make your best guess based on email content, signature, and context. Add "(vermutlich)" if uncertain. Example: "Sachbearbeiterin Personalwesen (vermutlich)"
-- "relationship": Relationship to {person}. Always provide your best guess, even if uncertain. Add "(vermutlich)" if guessing. Examples: "Kollege, gleiche Hochschule", "Externer Dienstleister (vermutlich)"
-- "communication_style": Detailed description of how the sender communicates: formal/informal, greeting style, directness, typical patterns
-- "topics": List of 1-3 SHORT SENTENCES (not single words!) describing what this email is about. BAD: "HR" GOOD: "Bitte um Pruefung und Unterschrift von Dokumenten zur Weiterbesch." BAD: "Termin" GOOD: "Terminabstimmung fuer Projekttreffen am 15.02."
-
-Return ONLY the JSON, no explanation."""
+    prompt += f"\nThe sender is: {sender}\n\n{email_section}\n"
 
     payload = {
         "model": model,
@@ -261,7 +361,9 @@ Return ONLY the JSON, no explanation."""
         "stream": False,
         "options": {
             "num_ctx": 32768,
-            "num_predict": 1200,
+            "num_predict": 4000,
+            "temperature": 0.1,
+            "top_p": 0.85,
         },
     }
 
@@ -296,16 +398,7 @@ Return ONLY the JSON, no explanation."""
         if not text:
             return {}
 
-        # JSON extrahieren
-        m = _JSON_RE.search(text)
-        if not m:
-            return {}
-
-        result = json.loads(m.group(0))
-        if not isinstance(result, dict):
-            return {}
-
-        return result
+        return _parse_contact_block(text)
 
     except Exception as e:
         log.debug("Contact-LLM Fehler: %s", e)
