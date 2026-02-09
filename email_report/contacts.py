@@ -1,5 +1,5 @@
 """
-contacts.py – Kontakt-Wissensbasis: pro E-Mail-Adresse ein JSON-Characterblatt.
+contacts.py -- Kontakt-Wissensbasis: pro E-Mail-Adresse ein JSON-Characterblatt.
 
 Abhaengigkeiten innerhalb des Pakets:
   - utils (log, write_secure)
@@ -158,6 +158,225 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
 
 
 # ============================================================
+# Profil: Struktur-Sanitizing + Beleg-Strip
+# ============================================================
+_PROFILE_ALLOWED_HEADERS_RE = re.compile(r"(?im)^\s*(Belegt|Beobachtet)\s*:\s*$")
+_PROFILE_ALLOWED_BULLET_RE = re.compile(r"^\s*-\s+")
+_BELEG_BULLET_RE = re.compile(
+    r'^\s*-\s*(.*?)\s*\(Beleg:\s*["“](.+?)["”]\s*\)\s*$',
+    flags=re.IGNORECASE,
+)
+
+
+def _sanitize_profile_structured(text: str) -> str:
+    """
+    Laesst nur diese Grundstruktur durch:
+      Belegt:
+      - ...
+      Beobachtet:
+      - ...
+    Alles andere (Paragraphen, Signatur-Dumps, etc.) wird verworfen.
+    """
+    txt = (text or "").strip()
+    if not txt:
+        return ""
+
+    out: list[str] = []
+    in_section = False
+    saw_any_bullet = False
+
+    for raw in txt.splitlines():
+        line = raw.rstrip()
+        stripped = line.strip()
+
+        if _PROFILE_ALLOWED_HEADERS_RE.match(stripped):
+            # Header normalisieren
+            if stripped.lower().startswith("belegt"):
+                out.append("Belegt:")
+            else:
+                out.append("Beobachtet:")
+            in_section = True
+            continue
+
+        if not in_section:
+            continue
+
+        if not stripped:
+            continue
+
+        if _PROFILE_ALLOWED_BULLET_RE.match(stripped):
+            out.append(stripped)
+            saw_any_bullet = True
+            continue
+
+        # alles andere verwerfen
+        continue
+
+    cleaned = "\n".join(out).strip()
+    if not cleaned or not saw_any_bullet:
+        return ""
+
+    return cleaned
+
+
+def _norm_ws(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "")).strip()
+
+
+def strip_belege_from_profile(profile_text: str, evidence_text: str | None = None) -> str:
+    """
+    Entfernt '(Beleg: "...")' aus Beobachtet-Bullets.
+    Optional: Wenn evidence_text gesetzt ist, werden Bullets verworfen,
+    deren Beleg-Zitat nicht im evidence_text vorkommt (Anti-Halluzination).
+    """
+    if not profile_text:
+        return ""
+
+    ev = _norm_ws(evidence_text).lower() if evidence_text else None
+
+    out_lines: list[str] = []
+    for line in profile_text.splitlines():
+        s = line.rstrip()
+
+        m = _BELEG_BULLET_RE.match(s)
+        if m:
+            bullet_text = m.group(1).strip()
+            quote = _norm_ws(m.group(2)).lower()
+
+            # Optional harte Validierung gegen Halluzination:
+            if ev is not None and quote and quote not in ev:
+                continue
+
+            out_lines.append(f"- {bullet_text}")
+            continue
+
+        out_lines.append(s)
+
+    return "\n".join([ln for ln in out_lines if ln.strip() != ""]).strip()
+
+
+# ============================================================
+# Profil: Bullet-Filter + Akkumulation
+# ============================================================
+_PLZ_RE = re.compile(r"\b\d{5}\b")
+_ROOM_RE = re.compile(r"(?i)\braum\b")
+_URL_RE = re.compile(r"https?://")
+
+_DE_STOPWORDS = frozenset({
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
+    "einer", "und", "oder", "fuer", "für", "von", "mit", "zu", "zum", "zur",
+    "in", "im", "am", "an", "auf", "aus", "bei", "nach", "ueber", "über",
+})
+
+
+def _filter_belegt_bullet(text: str) -> bool:
+    """True wenn Belegt-Bullet behalten werden soll (kein Adress-/Raum-/URL-Dump)."""
+    if _PLZ_RE.search(text):
+        return False
+    if _ROOM_RE.search(text):
+        return False
+    if _URL_RE.search(text):
+        return False
+    return True
+
+
+def _filter_beobachtet_bullet(text: str) -> bool:
+    """True wenn Beobachtet-Bullet Mindestqualitaet hat (>=3 Woerter, keine URL)."""
+    words = text.split()
+    if len(words) < 3:
+        return False
+    if _URL_RE.search(text):
+        return False
+    return True
+
+
+def _extract_section_bullets(profile_text: str, section: str) -> list[str]:
+    """Extrahiert Bullets aus einer bestimmten Sektion (belegt/beobachtet)."""
+    in_section = False
+    bullets: list[str] = []
+    target = section.lower()
+    for line in (profile_text or "").splitlines():
+        s = line.strip()
+        if _PROFILE_ALLOWED_HEADERS_RE.match(s):
+            in_section = s.lower().startswith(target)
+            continue
+        if in_section and s.startswith("- "):
+            bullets.append(s[2:].strip())
+    return bullets
+
+
+def _content_words(text: str) -> set[str]:
+    """Gibt Content-Woerter zurueck (ohne Stoppwoerter und Satzzeichen)."""
+    raw = re.sub(r"[^\w\s]", " ", text.lower()).split()
+    return {w for w in raw if w not in _DE_STOPWORDS and len(w) > 1}
+
+
+def _bullets_similar(a: str, b: str, threshold: float = 0.6) -> bool:
+    """Prueft ob zwei Bullets thematisch aehnlich genug fuer Dedup sind."""
+    wa = _content_words(a)
+    wb = _content_words(b)
+    if not wa or not wb:
+        return False
+    overlap = len(wa & wb)
+    return overlap / min(len(wa), len(wb)) >= threshold
+
+
+def _rebuild_profile(belegt: list[str], beobachtet: list[str]) -> str:
+    """Baut Profil-Text aus Bullet-Listen zusammen."""
+    parts: list[str] = []
+    if belegt:
+        parts.append("Belegt:")
+        parts.extend(f"- {b}" for b in belegt)
+    if beobachtet:
+        parts.append("Beobachtet:")
+        parts.extend(f"- {b}" for b in beobachtet)
+    return "\n".join(parts)
+
+
+def _postprocess_profile(new_profile: str, old_profile: str | None,
+                         evidence_text: str | None = None) -> str:
+    """
+    Vollstaendige Post-Processing-Pipeline fuer Profil-Text:
+    1. Struktur-Sanitizing (nur Belegt/Beobachtet)
+    2. Beleg-Zitate strippen (+ Validierung gegen evidence_text)
+    3. Belegt-Bullets filtern (Adressen, Raeume, URLs)
+    4. Beobachtet-Bullets filtern (Mindestqualitaet)
+    5. Alte Beobachtet-Bullets akkumulieren
+    6. Profil neu zusammenbauen
+    """
+    # 1. Struktur-Sanitizing
+    sanitized = _sanitize_profile_structured(new_profile)
+    if not sanitized:
+        return old_profile or ""
+
+    # 2. Belege strippen
+    stripped = strip_belege_from_profile(sanitized, evidence_text=evidence_text)
+    if not stripped:
+        return old_profile or ""
+
+    # 3. Belegt filtern
+    belegt = _extract_section_bullets(stripped, "belegt")
+    belegt = [b for b in belegt if _filter_belegt_bullet(b)]
+
+    # 4. Beobachtet filtern
+    beobachtet = _extract_section_bullets(stripped, "beobachtet")
+    beobachtet = [b for b in beobachtet if _filter_beobachtet_bullet(b)]
+
+    # 5. Alte Beobachtet-Bullets akkumulieren
+    if old_profile:
+        old_beobachtet = _extract_section_bullets(old_profile, "beobachtet")
+        old_beobachtet = [b for b in old_beobachtet if _filter_beobachtet_bullet(b)]
+        for ob in old_beobachtet:
+            if not any(_bullets_similar(ob, nb) for nb in beobachtet):
+                beobachtet.append(ob)
+    beobachtet = beobachtet[:6]
+
+    # 6. Zusammenbauen
+    rebuilt = _rebuild_profile(belegt, beobachtet)
+    return rebuilt or (old_profile or "")
+
+
+# ============================================================
 # Kontakt-Merge
 # ============================================================
 def merge_contact_update(existing: dict | None, llm_extracted: dict,
@@ -248,7 +467,7 @@ def _parse_contact_block(text: str) -> dict:
         # Wenn wir im Profile-Modus sind: pruefen ob ein neues Label kommt
         if in_profile:
             label_match = False
-            for key, regex in _CONTACT_LABELS:
+            for _, regex in _CONTACT_LABELS:
                 if regex.match(stripped):
                     label_match = True
                     break
@@ -322,8 +541,8 @@ def _format_email_section(thread: list[dict]) -> str:
 
 
 def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
-                                  ollama_url: str, prompt_base: str = "",
-                                  existing_contact: dict | None = None) -> dict:
+                                 ollama_url: str, prompt_base: str = "",
+                                 existing_contact: dict | None = None) -> dict:
     """
     Extrahiert Kontakt-Infos aus dem Thread per LLM.
     Gibt ein dict mit Feldern zurueck, bei Fehler leeres dict.
@@ -372,8 +591,12 @@ def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
     }
 
     try:
-        resp = requests.post(ollama_url, json=payload,
-                             headers={"Content-Type": "application/json"}, timeout=120)
+        resp = requests.post(
+            ollama_url,
+            json=payload,
+            headers={"Content-Type": "application/json"},
+            timeout=120,
+        )
         if resp.status_code != 200:
             log.debug("Contact-LLM HTTP %d", resp.status_code)
             return {}
@@ -402,7 +625,24 @@ def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
         if not text:
             return {}
 
-        return _parse_contact_block(text)
+        extracted = _parse_contact_block(text)
+
+        # Profil: Struktur-Sanitizing, Beleg-Strip, Bullet-Filter, Akkumulation
+        prof = extracted.get("profile")
+        if isinstance(prof, str) and prof.strip():
+            old_profile = ""
+            if existing_contact:
+                pf = existing_contact.get("profile")
+                if isinstance(pf, dict):
+                    old_profile = (pf.get("value") or "").strip()
+            result = _postprocess_profile(prof, old_profile or None,
+                                          evidence_text=email_section)
+            if result:
+                extracted["profile"] = result
+            else:
+                extracted.pop("profile", None)
+
+        return extracted
 
     except Exception as e:
         log.debug("Contact-LLM Fehler: %s", e)
