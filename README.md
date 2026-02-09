@@ -21,14 +21,17 @@ Jump to: [English](#english) | [Deutsch](#deutsch)
 
 ### What it does
 
-inbox-sentinel connects to an IMAP mailbox, fetches recent emails, and sends each one to a local LLM (via Ollama) for analysis. The LLM classifies each email by category, priority, and addressing. The results are compiled into an HTML report that is emailed back to you. Optionally, emails classified as SPAM, PHISHING, or FYI are auto-sorted into IMAP subfolders.
+inbox-sentinel connects to an IMAP mailbox, fetches recent emails, groups them into conversation threads, and sends each thread to a local LLM (via Ollama) for analysis. The LLM classifies each thread by category, priority, and addressing. The results are compiled into an HTML report that is emailed back to you. Optionally, emails classified as SPAM, PHISHING, or FYI are auto-sorted into IMAP subfolders, LLM-generated reply drafts are saved to your Drafts folder, and a per-sender knowledge base is built to provide context for future analyses.
 
 ### Key features
 
 - **Local LLM** -- your emails never leave your machine (Ollama runs locally)
+- **Threading** -- emails are grouped into conversation threads (Union-Find on headers + subject fallback)
 - **Priority 1-5** -- urgent items surface first in the report
 - **Categories** -- SPAM, PHISHING, FYI, ACTIONABLE with deterministic post-processing rules enforced in code
 - **Auto-sort** -- optional IMAP folder sorting by category (Spam, Quarantine, FYI)
+- **Auto-draft** -- optional LLM-generated reply drafts saved to your IMAP Drafts folder (opt-in)
+- **Auto-contacts** -- optional sender knowledge base built from emails; provides context to analysis and draft prompts (opt-in)
 - **Profiles** -- save/load server and account settings as JSON profiles
 - **Cross-platform** -- bootstrap scripts for Linux/macOS (sh) and Windows (PowerShell)
 
@@ -93,26 +96,35 @@ email_report/
   interactive.py   -- All user prompts (profile selection, settings)
   imap_client.py   -- IMAP fetch (read-only) and auto-sort (move)
   email_parser.py  -- MIME decoding, body extraction
+  threading.py     -- Thread grouping (Union-Find on headers + subject fallback)
   llm.py           -- Ollama interaction, validation, repair pass,
                       deterministic addressing detection & post-processing
   report.py        -- Sorting, HTML generation, block parsing
   smtp_client.py   -- Send HTML report via SMTP
+  drafts.py        -- Auto-draft: LLM reply drafts, IMAP APPEND
+  contacts.py      -- Auto-contacts: per-sender JSON profiles, LLM extraction
   main.py          -- Orchestration (glue between all modules)
   utils.py         -- Logging, file helpers
 
-prompt.txt         -- LLM system prompt (English, output in German)
-profiles/          -- Saved JSON profiles (excluded from git)
+prompt.txt             -- LLM analysis prompt (English instructions, German output)
+draft_prompt.txt       -- LLM draft generation prompt
+contact_prompt.txt     -- LLM contact extraction prompt
+profiles/              -- Saved JSON profiles (excluded from git)
+contacts/              -- Per-sender JSON profiles (excluded from git)
 ```
 
 ### Processing pipeline
 
 1. Load profile or configure interactively
 2. IMAP: fetch emails (read-only, `BODY.PEEK[]`)
-3. Per email: LLM analysis -> validate -> repair if needed -> fallback
-4. Deterministic post-processing (addressing, priority caps, SPAM/PHISHING enforcement)
-5. Sort results by priority, generate HTML report
-6. Send report via SMTP
-7. Auto-sort emails into IMAP folders (optional, after report is sent)
+3. Group emails into conversation threads (Union-Find)
+4. Per thread: load sender contact -> LLM analysis -> validate -> repair if needed -> fallback
+5. Deterministic post-processing (addressing, priority caps, SPAM/PHISHING enforcement)
+6. Per thread (optional): generate LLM reply draft, update sender contact
+7. Sort results by priority, generate HTML report
+8. Send report via SMTP
+9. Save drafts to IMAP Drafts folder (optional, after report is sent)
+10. Auto-sort emails into IMAP folders (optional, after report is sent)
 
 ### Configuration
 
@@ -160,14 +172,17 @@ Developed by human with AI assistance (e.g. Claude, Anthropic).
 
 ### Was es tut
 
-inbox-sentinel verbindet sich mit einer IMAP-Mailbox, holt aktuelle E-Mails und schickt jede einzelne an ein lokales LLM (via Ollama) zur Analyse. Das LLM klassifiziert jede E-Mail nach Kategorie, Prioritaet und Adressierung. Die Ergebnisse werden in einen HTML-Report kompiliert und per E-Mail zurueckgeschickt. Optional werden E-Mails der Kategorien SPAM, PHISHING oder FYI automatisch in IMAP-Unterordner sortiert.
+inbox-sentinel verbindet sich mit einer IMAP-Mailbox, holt aktuelle E-Mails, gruppiert sie in Konversations-Threads und schickt jeden Thread an ein lokales LLM (via Ollama) zur Analyse. Das LLM klassifiziert jeden Thread nach Kategorie, Prioritaet und Adressierung. Die Ergebnisse werden in einen HTML-Report kompiliert und per E-Mail zurueckgeschickt. Optional werden E-Mails der Kategorien SPAM, PHISHING oder FYI automatisch in IMAP-Unterordner sortiert, LLM-generierte Antwortentwuerfe im Drafts-Ordner abgelegt und eine Sender-Wissensbank aufgebaut, die kuenftige Analysen mit Kontext versorgt.
 
 ### Kernfunktionen
 
 - **Lokales LLM** -- E-Mails verlassen nie den eigenen Rechner (Ollama laeuft lokal)
+- **Threading** -- E-Mails werden zu Konversations-Threads gruppiert (Union-Find auf Header + Betreff-Fallback)
 - **Prioritaet 1-5** -- dringende Eintraege erscheinen zuerst im Report
 - **Kategorien** -- SPAM, PHISHING, FYI, ACTIONABLE mit deterministischen Post-Processing-Regeln im Code
 - **Auto-Sort** -- optionale IMAP-Ordner-Sortierung nach Kategorie (Spam, Quarantine, FYI)
+- **Auto-Draft** -- optionale LLM-generierte Antwortentwuerfe im IMAP-Drafts-Ordner (opt-in)
+- **Auto-Contacts** -- optionale Sender-Wissensbank aus E-Mails; liefert Kontext fuer Analyse- und Draft-Prompts (opt-in)
 - **Profile** -- Server- und Account-Einstellungen als JSON-Profile speichern/laden
 - **Plattformuebergreifend** -- Bootstrap-Skripte fuer Linux/macOS (sh) und Windows (PowerShell)
 
@@ -232,26 +247,35 @@ email_report/
   interactive.py   -- Alle User-Prompts (Profilwahl, Settings)
   imap_client.py   -- IMAP Fetch (read-only) und Auto-Sort (move)
   email_parser.py  -- MIME-Decoding, Body-Extraktion
+  threading.py     -- Thread-Gruppierung (Union-Find auf Header + Betreff-Fallback)
   llm.py           -- Ollama-Integration, Validation, Repair-Pass,
                       deterministische Addressing-Erkennung & Post-Processing
   report.py        -- Sortierung, HTML-Generierung, Block-Parsing
   smtp_client.py   -- HTML-Report per SMTP verschicken
+  drafts.py        -- Auto-Draft: LLM-Antwortentwuerfe, IMAP APPEND
+  contacts.py      -- Auto-Contacts: Sender-Profile als JSON, LLM-Extraktion
   main.py          -- Orchestrierung (Glue zwischen allen Modulen)
   utils.py         -- Logging, File-Helper
 
-prompt.txt         -- LLM-Systemprompt (Englisch, Ausgabe auf Deutsch)
-profiles/          -- Gespeicherte JSON-Profile (nicht in git)
+prompt.txt             -- LLM-Analyseprompt (Englisch, Ausgabe auf Deutsch)
+draft_prompt.txt       -- LLM-Draft-Generierungsprompt
+contact_prompt.txt     -- LLM-Kontaktextraktionsprompt
+profiles/              -- Gespeicherte JSON-Profile (nicht in git)
+contacts/              -- Sender-Profile als JSON (nicht in git)
 ```
 
 ### Verarbeitungspipeline
 
 1. Profil laden oder interaktiv konfigurieren
 2. IMAP: E-Mails holen (read-only, `BODY.PEEK[]`)
-3. Pro E-Mail: LLM-Analyse -> validieren -> ggf. reparieren -> Fallback
-4. Deterministisches Post-Processing (Adressierung, Prioritaets-Caps, SPAM/PHISHING Enforcement)
-5. Nach Prioritaet sortieren, HTML-Report generieren
-6. Report per SMTP verschicken
-7. E-Mails in IMAP-Ordner einsortieren (optional, nach Versand des Reports)
+3. E-Mails in Konversations-Threads gruppieren (Union-Find)
+4. Pro Thread: Sender-Kontakt laden -> LLM-Analyse -> validieren -> ggf. reparieren -> Fallback
+5. Deterministisches Post-Processing (Adressierung, Prioritaets-Caps, SPAM/PHISHING Enforcement)
+6. Pro Thread (optional): LLM-Antwortentwurf generieren, Sender-Kontakt aktualisieren
+7. Nach Prioritaet sortieren, HTML-Report generieren
+8. Report per SMTP verschicken
+9. Drafts in IMAP-Drafts-Ordner speichern (optional, nach Versand)
+10. E-Mails in IMAP-Ordner einsortieren (optional, nach Versand)
 
 ### Konfiguration
 

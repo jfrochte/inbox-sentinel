@@ -11,6 +11,7 @@ Kontakt-Dateien liegen in contacts/ (ein JSON pro Adresse).
 # ============================================================
 # Externe Abhaengigkeiten
 # ============================================================
+import copy
 import json
 import os
 import re
@@ -165,7 +166,6 @@ def merge_contact_update(existing: dict | None, llm_extracted: dict,
     Merged LLM-extrahierte Infos in einen bestehenden (oder neuen) Kontakt.
     KRITISCH: notes wird NIE automatisch ueberschrieben.
     """
-    import copy
     if existing:
         contact = copy.deepcopy(existing)
     else:
@@ -181,8 +181,6 @@ def merge_contact_update(existing: dict | None, llm_extracted: dict,
     # Felder mit value/updated
     dated_fields = ["tone", "language", "role_or_title", "relationship",
                     "communication_style", "profile"]
-    _SKIP_VALUES = {"nicht bestimmbar", "nicht beurteilbar", "unbekannt",
-                    "keine neuen informationen", "n/a", "-", "—"}
     for key in dated_fields:
         new_val = (llm_extracted.get(key) or "").strip()
         if new_val and new_val.lower().rstrip(".") not in _SKIP_VALUES:
@@ -219,6 +217,12 @@ _CONTACT_LABELS = [
 
 # Profile ist ein mehrzeiliges Feld (letztes vor <<END>>)
 _PROFILE_RE = re.compile(r"(?i)^profile\s*[:=\-]\s*")
+
+# Werte die beim Merge ignoriert werden (LLM-Platzhalter fuer "weiss nicht")
+_SKIP_VALUES = frozenset({
+    "nicht bestimmbar", "nicht beurteilbar", "unbekannt",
+    "keine neuen informationen", "n/a", "-", "\u2014",
+})
 
 
 def _parse_contact_block(text: str) -> dict:

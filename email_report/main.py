@@ -5,20 +5,25 @@ Abhaengigkeiten innerhalb des Pakets:
   - config (Config, Defaults, Debug-Flags)
   - interactive (alle Benutzer-Prompts, Profil-Auswahl)
   - utils (Dateihelfer, Logging, load_prompt_file)
-  - imap_client (E-Mail-Abruf)
-  - llm (LLM-Analyse)
-  - report (Sortierung, HTML-Erzeugung)
+  - imap_client (E-Mail-Abruf, Auto-Sort)
+  - threading (Thread-Gruppierung per Union-Find)
+  - llm (LLM-Analyse, Validierung, Repair)
+  - report (Sortierung, HTML-Erzeugung, Block-Parsing)
   - smtp_client (Versand)
+  - drafts (Auto-Draft: LLM-Antwortentwuerfe)
+  - contacts (Auto-Contacts: Sender-Wissensbank)
 
 Dieser Modul enthaelt die main()-Funktion, die den gesamten Ablauf steuert:
   1) Profil laden (optional)
   2) Alle Parameter interaktiv abfragen
   3) Profil speichern (optional)
-  4) IMAP: Mails holen
-  5) LLM Summaries erzeugen
-  6) Sortieren
-  7) HTML Mail an sich selbst schicken
-  8) Temp-Dateien loeschen (ausser Debug)
+  4) IMAP: Mails holen, in Threads gruppieren
+  5) Pro Thread: Kontakt laden -> LLM-Analyse -> Auto-Draft -> Kontakt aktualisieren
+  6) Sortieren, HTML-Report generieren
+  7) Report per SMTP verschicken
+  8) Drafts in IMAP speichern (optional)
+  9) E-Mails in IMAP-Ordner sortieren (optional)
+ 10) Temp-Dateien loeschen (ausser Debug)
 """
 
 # ============================================================
@@ -69,17 +74,7 @@ from email_report.contacts import (
 # Main
 # ============================================================
 def main():
-    """
-    Ablauf:
-    1) Profil laden (optional)
-    2) Alle Parameter am Anfang abfragen (Return => Default / Profilwert)
-    3) Profil speichern (optional)
-    4) IMAP: Mails holen
-    5) LLM Summaries
-    6) Sortieren
-    7) HTML Mail an sich selbst schicken
-    8) Files loeschen (ausser Debug)
-    """
+    """Hauptablauf: siehe Modul-Docstring fuer Details."""
     # --- Profil laden ---
     cfg, profile_name = prompt_load_profile()
 
