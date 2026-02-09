@@ -49,10 +49,12 @@ INTERNAL DECISION (do NOT output this label):
      triggers: deadline change, blocking issue, conflict/complaint, budget/contract, compliance/datenschutz/IT security,
      external partner or leadership-level topic, anything that could escalate,
      response to {person}'s own request (e.g. someone delivering documents/info/data that {person} asked for),
-     attachments or content that {person} likely needs to review/process/forward.
-   - DESK=OPTIONAL if nice-to-know or CC-pressure (visibility only) without risk/impact.
-   - DESK=NO if clearly irrelevant (generic newsletter/ads/no impact).
-   - When in doubt between YES and OPTIONAL: choose YES. It is better to surface an email than to miss it.
+     attachments or content that {person} likely needs to review/process/forward,
+     any email from a known colleague or collaborator about a work topic,
+     any email where {person} is in To: (not just Cc:).
+   - DESK=OPTIONAL only if ALL of these are true: (1) {person} is only in Cc: or on a mailing list, AND (2) the topic has no direct impact on {person}'s responsibilities, AND (3) no response or action from {person} is expected.
+   - DESK=NO only if clearly irrelevant (generic newsletter/ads/automated notifications with no impact).
+   - DEFAULT RULE: When in doubt, choose DESK=YES. A false ACTIONABLE is harmless; a false FYI means {person} misses an email. Err on the side of ACTIONABLE.
 
 CATEGORY (deterministic):
 - If PHISHING -> Category PHISHING, Priority 5, Actions Keine. Summary must mention phishing suspicion.
@@ -83,9 +85,10 @@ PRIORITY:
   - Priority 2 if <=7 days
   - Priority 3 otherwise
 - Else (FYI):
-  - Priority 3 if DESK=YES but no reaction needed (need-to-know)
-  - Priority 4 if DESK=OPTIONAL
-  - Priority 5 if DESK=NO
+  - Priority 3 if need-to-know but no reaction needed
+  - Priority 4 if DESK=OPTIONAL (Cc-only, no impact)
+  - Priority 5 if DESK=NO (irrelevant)
+  - NOTE: If you find yourself assigning FYI Priority 3, reconsider whether ACTIONABLE would be more appropriate.
 - Cap: If Addressing LIST and Asked-Directly NO -> Priority cannot be 1.
 
 ACTIONS for {person} (max 2, separated by "; "):

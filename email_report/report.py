@@ -25,6 +25,14 @@ from email_report.config import DEFAULT_SORT_FOLDERS
 
 
 # ============================================================
+# Block-Separator (einmal definiert, ueberall genutzt)
+# Absichtlich kein reiner Strich-Block, damit E-Mail-Inhalte
+# (Signaturen, Weiterleitungs-Marker) ihn nie zufaellig enthalten.
+# ============================================================
+BLOCK_SEPARATOR = "====== BLOCK_SEP ======"
+
+
+# ============================================================
 # Prioritaet extrahieren und sortieren
 # (bleibt bewusst tolerant)
 # ============================================================
@@ -50,13 +58,13 @@ def sort_summaries_by_priority(input_filename: str, output_filename: str) -> Non
     with open(input_filename, "r", encoding="utf-8") as f:
         content = f.read()
 
-    blocks = [b.strip() for b in content.split("-----------------------") if b.strip()]
+    blocks = [b.strip() for b in content.split(BLOCK_SEPARATOR) if b.strip()]
     items = [(b, extract_priority(b)) for b in blocks]
     items.sort(key=lambda x: x[1])
 
     out_parts = []
     for idx, (block, _prio) in enumerate(items, start=1):
-        out_parts.append(f"E-Mail Nummer: {idx}\n{block}\n-----------------------\n")
+        out_parts.append(f"E-Mail Nummer: {idx}\n{block}\n{BLOCK_SEPARATOR}\n")
 
     write_secure(output_filename, "".join(out_parts))
 
@@ -310,7 +318,7 @@ def summaries_to_html_pre(sorted_text: str) -> str:
     Escape gegen HTML Injection und Ausgabe im <pre>.
     """
     escaped = html.escape(sorted_text)
-    escaped = escaped.replace("-----------------------", "\n-----------------------\n")
+    escaped = escaped.replace(BLOCK_SEPARATOR, "\n-----------------------\n")
     return (
         "<html><body>"
         "<p><b>Daily Email Report</b></p>"
@@ -326,7 +334,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
     Baut eine besser scanbare HTML-Mail (Kartenansicht).
     Hinweis: Der "Schnellblick" wurde bewusst entfernt.
     """
-    blocks = [b.strip() for b in (sorted_text or "").split("-----------------------") if b.strip()]
+    blocks = [b.strip() for b in (sorted_text or "").split(BLOCK_SEPARATOR) if b.strip()]
     items = [_parse_llm_summary_block(b) for b in blocks]
     status_counts = {"OK": 0, "REPAIRED": 0, "FALLBACK": 0}
     for _it in items:
@@ -395,7 +403,12 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
                 if ds_gen or ds_fail:
                     parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">Drafts: {ds_gen} erstellt, {ds_fail} fehlgeschlagen</div>")
             if expected_count != reported:
-                parts.append("<div style=\"margin-top:10px;padding:10px;border-radius:10px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:12px;\"><b>WARNUNG:</b> Es fehlen Eintraege im Report. Bitte Log/Raw ansehen.</div>")
+                diff = expected_count - reported
+                if diff > 0:
+                    hint = f"{diff} Thread(s) fehlen im Report (erwartet: {expected_count}, vorhanden: {reported})."
+                else:
+                    hint = f"{-diff} ueberzaehlige Eintraege im Report (erwartet: {expected_count}, vorhanden: {reported})."
+                parts.append(f"<div style=\"margin-top:10px;padding:10px;border-radius:10px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:12px;\"><b>WARNUNG:</b> {esc(hint)}</div>")
     parts.append("</td></tr>")
     parts.append("<tr><td style=\"height:12px;\"></td></tr>")
 

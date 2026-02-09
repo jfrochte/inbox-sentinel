@@ -61,7 +61,7 @@ from email_report.utils import (
 from email_report.imap_client import imap_fetch_emails_for_range, imap_move_emails
 from email_report.llm import _analyze_thread_guaranteed
 from email_report.threading import group_into_threads
-from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block
+from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block, BLOCK_SEPARATOR
 from email_report.smtp_client import send_email_html
 from email_report.drafts import generate_draft_text, build_draft_message, imap_save_drafts
 from email_report.contacts import (
@@ -301,7 +301,7 @@ def main():
                 log.debug("Contact-Update fehlgeschlagen fuer %s: %s", sender_addr, e)
 
         append_secure(summaries_file, final_block)
-        append_secure(summaries_file, "\n\n-----------------------\n\n")
+        append_secure(summaries_file, f"\n\n{BLOCK_SEPARATOR}\n\n")
 
     # --- Sortieren nach Priority ---
     sort_summaries_by_priority(summaries_file, sorted_file)
