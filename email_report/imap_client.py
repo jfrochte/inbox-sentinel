@@ -200,37 +200,12 @@ def _check_keyword_support(mail) -> bool:
     return False
 
 
-def _is_already_tagged(mail, uid_bytes, keyword: str) -> bool:
-    """Prueft ob eine UID bereits das angegebene Keyword-Flag traegt."""
-    try:
-        status, data = mail.uid('fetch', uid_bytes, '(FLAGS)')
-        if status != "OK" or not data or not data[0]:
-            return False
-        flags_raw = data[0]
-        if isinstance(flags_raw, tuple):
-            flags_raw = flags_raw[1]
-        if isinstance(flags_raw, bytes):
-            flags_raw = flags_raw.decode("utf-8", errors="replace")
-        return keyword in str(flags_raw)
-    except Exception:
-        return False
-
-
-def _tag_as_sorted(mail, uid_bytes, keyword: str) -> bool:
-    """Setzt das Keyword-Flag auf einer UID. Gibt True bei Erfolg zurueck."""
-    try:
-        status, _ = mail.uid('store', uid_bytes, '+FLAGS', f'({keyword})')
-        return status == "OK"
-    except Exception as e:
-        log.debug("Keyword-Tag fehlgeschlagen fuer UID %s: %s", uid_bytes, e)
-        return False
-
 
 def _inject_x_priority(raw_bytes: bytes, priority: int) -> bytes:
-    """Injiziert einen X-Priority Header in eine rohe IMAP-Nachricht.
+    """Setzt X-Priority Header in einer rohen IMAP-Nachricht.
 
-    Fuegt den Header vor dem Ende des Header-Blocks ein (vor \\r\\n\\r\\n).
-    Falls X-Priority schon vorhanden ist, wird nichts geaendert.
+    Ersetzt einen vorhandenen X-Priority Header oder fuegt einen neuen
+    vor dem Ende des Header-Blocks ein (vor \\r\\n\\r\\n).
     """
     # Header-Ende finden
     header_end = raw_bytes.find(b"\r\n\r\n")
@@ -241,13 +216,21 @@ def _inject_x_priority(raw_bytes: bytes, priority: int) -> bytes:
     if header_end < 0:
         return raw_bytes  # Kein Header/Body-Separator gefunden
 
-    # Duplikat vermeiden
     header_section = raw_bytes[:header_end]
-    if b"X-Priority:" in header_section or b"x-priority:" in header_section.lower():
-        return raw_bytes
+    body_section = raw_bytes[header_end:]
 
+    # Vorhandenen X-Priority Header ersetzen
+    new_header, count = re.subn(
+        rb"(?mi)^X-Priority:.*$",
+        f"X-Priority: {priority}".encode(),
+        header_section,
+    )
+    if count > 0:
+        return new_header + body_section
+
+    # Kein vorhandener Header → neuen einfuegen
     x_prio = sep + f"X-Priority: {priority}".encode()
-    return raw_bytes[:header_end] + x_prio + raw_bytes[header_end:]
+    return header_section + x_prio + body_section
 
 
 def _fetch_message_data(mail, uid_bytes):
@@ -394,20 +377,7 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                     result["errors"].append(f"UID {uid}: FETCH fehlgeschlagen")
                     continue
 
-                # Idempotenz: bereits getaggte Mails ueberspringen —
-                # ABER nur wenn X-Priority schon vorhanden ist (Migration).
-                if kw_supported and _is_already_tagged(mail, uid_b, SENTINEL_KEYWORD):
-                    header_end = raw_bytes.find(b"\r\n\r\n")
-                    if header_end < 0:
-                        header_end = raw_bytes.find(b"\n\n")
-                    header_section = raw_bytes[:header_end] if header_end > 0 else raw_bytes[:2048]
-                    if b"X-Priority:" in header_section or b"x-priority:" in header_section.lower():
-                        result["skipped"] += 1
-                        continue
-                    # Getaggt aber ohne X-Priority → re-process (Migration)
-                    log.debug("UID %s: $Sentinel_Sorted aber kein X-Priority, re-process", uid)
-
-                # X-Priority Header injizieren
+                # X-Priority Header setzen/ersetzen
                 modified = _inject_x_priority(raw_bytes, priority)
 
                 # Flags zusammenbauen: Original + extra + $Sentinel_Sorted
