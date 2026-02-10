@@ -174,32 +174,152 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
 
 
 # ============================================================
-# IMAP Auto-Sort: E-Mails in Unterordner verschieben
+# IMAP Auto-Sort: Crash-sichere Nachbearbeitung
 # ============================================================
-def imap_move_emails(username: str, password: str, imap_server: str, imap_port: int,
-                     mailbox: str, moves: list[dict]) -> dict:
+def _check_keyword_support(mail) -> bool:
+    """Prueft ob die Mailbox benutzerdefinierte Keywords (Flags) unterstuetzt.
+
+    PERMANENTFLAGS mit '\\*' bedeutet: Server erlaubt beliebige Keywords.
+
+    imaplib speichert PERMANENTFLAGS als Teil der OK-Responses (nicht als
+    eigenen Key), daher muessen wir mail.response("OK") durchsuchen.
     """
-    Verschiebt E-Mails per UID in IMAP-Unterordner.
+    try:
+        # PERMANENTFLAGS kommt als untagged OK response von SELECT:
+        # * OK [PERMANENTFLAGS (\Answered \Flagged \Deleted \Seen \Draft \*)]
+        resp = mail.response("OK")
+        if resp and resp[1]:
+            for item in resp[1]:
+                if item is None:
+                    continue
+                text = item.decode("utf-8", errors="replace") if isinstance(item, bytes) else str(item)
+                if "PERMANENTFLAGS" in text and "\\*" in text:
+                    return True
+    except Exception:
+        pass
+    return False
 
-    moves: Liste von {"uid": "...", "folder": "Spam"/"Quarantine"/"FYI"}
 
-    Ablauf pro E-Mail:
-    1) Ordner-Separator via mail.list() erkennen
-    2) Unterordner erstellen wenn noetig (mail.create)
-    3) mail.uid('copy', uid, zielordner)
-    4) mail.uid('store', uid, '+FLAGS', '(\\Deleted)')
-    5) UID EXPUNGE (nur unsere UIDs) oder Fallback auf regulaeres EXPUNGE
+def _is_already_tagged(mail, uid_bytes, keyword: str) -> bool:
+    """Prueft ob eine UID bereits das angegebene Keyword-Flag traegt."""
+    try:
+        status, data = mail.uid('fetch', uid_bytes, '(FLAGS)')
+        if status != "OK" or not data or not data[0]:
+            return False
+        flags_raw = data[0]
+        if isinstance(flags_raw, tuple):
+            flags_raw = flags_raw[1]
+        if isinstance(flags_raw, bytes):
+            flags_raw = flags_raw.decode("utf-8", errors="replace")
+        return keyword in str(flags_raw)
+    except Exception:
+        return False
 
-    Sicherheit: Nutzt UID EXPUNGE (UIDPLUS, RFC 4315) wenn verfuegbar,
-    damit nur die von uns geflaggten Mails entfernt werden und keine
-    vorher schon als \\Deleted markierten Mails verloren gehen.
 
-    Gibt {"moved": int, "failed": int, "errors": [str]} zurueck.
+def _tag_as_sorted(mail, uid_bytes, keyword: str) -> bool:
+    """Setzt das Keyword-Flag auf einer UID. Gibt True bei Erfolg zurueck."""
+    try:
+        status, _ = mail.uid('store', uid_bytes, '+FLAGS', f'({keyword})')
+        return status == "OK"
+    except Exception as e:
+        log.debug("Keyword-Tag fehlgeschlagen fuer UID %s: %s", uid_bytes, e)
+        return False
+
+
+def _inject_x_priority(raw_bytes: bytes, priority: int) -> bytes:
+    """Injiziert einen X-Priority Header in eine rohe IMAP-Nachricht.
+
+    Fuegt den Header vor dem Ende des Header-Blocks ein (vor \\r\\n\\r\\n).
+    Falls X-Priority schon vorhanden ist, wird nichts geaendert.
     """
-    result = {"moved": 0, "failed": 0, "errors": []}
+    # Header-Ende finden
+    header_end = raw_bytes.find(b"\r\n\r\n")
+    sep = b"\r\n"
+    if header_end < 0:
+        header_end = raw_bytes.find(b"\n\n")
+        sep = b"\n"
+    if header_end < 0:
+        return raw_bytes  # Kein Header/Body-Separator gefunden
 
-    if not moves:
+    # Duplikat vermeiden
+    header_section = raw_bytes[:header_end]
+    if b"X-Priority:" in header_section or b"x-priority:" in header_section.lower():
+        return raw_bytes
+
+    x_prio = sep + f"X-Priority: {priority}".encode()
+    return raw_bytes[:header_end] + x_prio + raw_bytes[header_end:]
+
+
+def _fetch_raw_with_date(mail, uid_bytes):
+    """Holt rohe Nachricht + INTERNALDATE per UID FETCH.
+
+    Returns: (raw_bytes, internaldate_str) oder (None, None) bei Fehler.
+    """
+    try:
+        status, data = mail.uid('fetch', uid_bytes, '(BODY.PEEK[] INTERNALDATE)')
+        if status != "OK" or not data:
+            return None, None
+
+        raw_bytes = None
+        meta_str = ""
+        for part in data:
+            if isinstance(part, tuple):
+                meta = part[0]
+                raw_bytes = part[1]
+                if isinstance(meta, bytes):
+                    meta_str = meta.decode("utf-8", errors="replace")
+                else:
+                    meta_str = str(meta)
+                break
+
+        if not raw_bytes:
+            return None, None
+
+        # INTERNALDATE aus Metadaten extrahieren
+        internaldate = None
+        m = re.search(r'INTERNALDATE "([^"]+)"', meta_str)
+        if m:
+            internaldate = m.group(1)
+
+        return raw_bytes, internaldate
+    except Exception as e:
+        log.debug("FETCH fehlgeschlagen fuer UID %s: %s", uid_bytes, e)
+        return None, None
+
+
+def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: int,
+                   mailbox: str, sort_moves: list[dict],
+                   inbox_flags: list[dict] | None = None) -> dict:
+    """
+    Crash-sichere IMAP-Nachbearbeitung in einer Session.
+
+    sort_moves: [{"uid": str, "folder": str, "priority": int}]
+        FETCH → X-Priority injizieren → APPEND in Zielordner → verify →
+        $Sentinel_Sorted taggen → \\Seen + \\Deleted auf Original →
+        UID EXPUNGE (nur mit UIDPLUS, sonst nur \\Deleted).
+
+    inbox_flags: [{"uid": str, "action": "seen"|"flagged"}]
+        STORE \\Seen (FYI) oder \\Flagged (ACTIONABLE Prio 1-2) →
+        $Sentinel_Sorted taggen.
+
+    Sicherheitsgarantien:
+    - Kein Email-Verlust: Original wird erst geloescht wenn Kopie verifiziert
+    - Crash-sicher: Abbruch → schlimmstenfalls Duplikat im Zielordner
+    - Idempotent: $Sentinel_Sorted verhindert Doppelverarbeitung
+    - Server-kompatibel: ohne UIDPLUS nur \\Deleted (kein EXPUNGE)
+
+    Gibt {"sorted": int, "flagged": int, "skipped": int, "failed": int,
+          "errors": [str], "keywords_supported": bool, "has_uidplus": bool}
+    zurueck.
+    """
+    from email_report.config import SENTINEL_KEYWORD
+
+    result = {"sorted": 0, "flagged": 0, "skipped": 0, "failed": 0,
+              "errors": [], "keywords_supported": False, "has_uidplus": False}
+
+    if not sort_moves and not inbox_flags:
         return result
+    inbox_flags = inbox_flags or []
 
     mail = imaplib.IMAP4_SSL(imap_server, imap_port)
     try:
@@ -212,21 +332,7 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
             has_uidplus = b"UIDPLUS" in caps or "UIDPLUS" in caps
         except Exception:
             pass
-
-        # Ordner-Separator erkennen (z.B. "/" oder ".")
-        separator = "/"
-        try:
-            status, folder_list = mail.list()
-            if status == "OK" and folder_list:
-                first = folder_list[0]
-                if isinstance(first, bytes):
-                    first = first.decode("utf-8", errors="replace")
-                # Format: '(\\HasNoChildren) "/" INBOX'
-                m = re.search(r'\) "(.)" ', first)
-                if m:
-                    separator = m.group(1)
-        except Exception as e:
-            log.debug("Konnte Ordner-Separator nicht ermitteln, nutze '/': %s", e)
+        result["has_uidplus"] = has_uidplus
 
         # Quell-Mailbox read-write oeffnen
         status, _ = mail.select(mailbox, readonly=False)
@@ -234,77 +340,138 @@ def imap_move_emails(username: str, password: str, imap_server: str, imap_port: 
             result["errors"].append(f"Konnte Mailbox '{mailbox}' nicht oeffnen")
             return result
 
-        # Bekannte Zielordner sammeln und ggf. erstellen
+        # PERMANENTFLAGS pruefen: Keywords supported?
+        kw_supported = _check_keyword_support(mail)
+        result["keywords_supported"] = kw_supported
+
+        # --- Phase 1: Zielordner erstellen ---
         created_folders = set()
-        for move in moves:
+        for move in sort_moves:
             folder_name = move.get("folder", "")
             if not folder_name or folder_name in created_folders:
                 continue
-
-            # Zielordner auf gleicher Ebene wie INBOX (Top-Level)
-            target = folder_name
-
             try:
-                status_c, _ = mail.create(target)
+                status_c, _ = mail.create(folder_name)
                 if status_c == "OK":
-                    log.info("IMAP-Ordner erstellt: %s", target)
+                    log.info("IMAP-Ordner erstellt: %s", folder_name)
             except Exception:
                 pass  # Ordner existiert vermutlich schon
-            # Subscribe: ohne Abo zeigen viele Clients den Ordner nicht an
             try:
-                mail.subscribe(target)
+                mail.subscribe(folder_name)
             except Exception:
                 pass
             created_folders.add(folder_name)
 
-        # E-Mails verschieben
-        deleted_uids = []  # UIDs die wir als \Deleted markiert haben
-        for move in moves:
+        # --- Phase 2: Sort-Moves (SPAM/PHISHING) ---
+        # FETCH → X-Priority → APPEND → verify → tag → \Seen → \Deleted
+        deleted_uids = []  # Fuer Batch-EXPUNGE am Ende
+
+        for move in sort_moves:
             uid = move.get("uid", "")
             folder_name = move.get("folder", "")
+            priority = move.get("priority", 5)
             if not uid or not folder_name:
                 continue
 
-            target = folder_name
             uid_b = uid.encode() if isinstance(uid, str) else uid
 
             try:
-                # Copy to target folder
-                status, _ = mail.uid('copy', uid_b, target)
-                if status != "OK":
-                    result["failed"] += 1
-                    result["errors"].append(f"UID {uid}: copy nach {target} fehlgeschlagen")
+                # Idempotenz: bereits getaggte Mails ueberspringen
+                if kw_supported and _is_already_tagged(mail, uid_b, SENTINEL_KEYWORD):
+                    result["skipped"] += 1
                     continue
 
-                # Mark as deleted in source
-                mail.uid('store', uid_b, '+FLAGS', '(\\Deleted)')
-                deleted_uids.append(uid)
-                result["moved"] += 1
+                # FETCH rohe Nachricht + INTERNALDATE
+                raw_bytes, internaldate = _fetch_raw_with_date(mail, uid_b)
+                if not raw_bytes:
+                    result["failed"] += 1
+                    result["errors"].append(f"UID {uid}: FETCH fehlgeschlagen")
+                    continue
+
+                # X-Priority Header injizieren
+                modified = _inject_x_priority(raw_bytes, priority)
+
+                # APPEND in Zielordner (mit \Seen + Original-Datum)
+                status_a, _ = mail.append(
+                    folder_name,
+                    "(\\Seen)",
+                    internaldate,
+                    modified,
+                )
+                if status_a != "OK":
+                    result["failed"] += 1
+                    result["errors"].append(f"UID {uid}: APPEND nach {folder_name} fehlgeschlagen")
+                    continue
+
+                # --- Kopie verifiziert, jetzt Original aufraumen ---
+
+                # $Sentinel_Sorted taggen (Idempotenz fuer naechsten Lauf)
+                if kw_supported:
+                    _tag_as_sorted(mail, uid_b, SENTINEL_KEYWORD)
+
+                # \Seen auf Original (gelesen in INBOX)
+                try:
+                    mail.uid('store', uid_b, '+FLAGS', '(\\Seen)')
+                except Exception:
+                    pass
+
+                # \Deleted auf Original
+                try:
+                    mail.uid('store', uid_b, '+FLAGS', '(\\Deleted)')
+                    deleted_uids.append(uid)
+                except Exception:
+                    pass
+
+                result["sorted"] += 1
 
             except Exception as e:
                 result["failed"] += 1
                 result["errors"].append(f"UID {uid}: {e}")
-                log.warning("Fehler beim Verschieben von UID %s nach %s: %s", uid, target, e)
+                log.warning("Sort-Fehler fuer UID %s nach %s: %s", uid, folder_name, e)
 
-        # Expunge: nur unsere UIDs entfernen
-        if deleted_uids:
+        # --- Phase 3: Inbox-Flags (FYI → \Seen, ACTIONABLE Prio 1-2 → \Flagged) ---
+        for flag_op in inbox_flags:
+            uid = flag_op.get("uid", "")
+            action = flag_op.get("action", "")
+            if not uid or not action:
+                continue
+
+            uid_b = uid.encode() if isinstance(uid, str) else uid
+
+            try:
+                # Idempotenz: bereits getaggte Mails ueberspringen
+                if kw_supported and _is_already_tagged(mail, uid_b, SENTINEL_KEYWORD):
+                    result["skipped"] += 1
+                    continue
+
+                if action == "seen":
+                    mail.uid('store', uid_b, '+FLAGS', '(\\Seen)')
+                elif action == "flagged":
+                    mail.uid('store', uid_b, '+FLAGS', '(\\Flagged)')
+
+                # $Sentinel_Sorted taggen
+                if kw_supported:
+                    _tag_as_sorted(mail, uid_b, SENTINEL_KEYWORD)
+
+                result["flagged"] += 1
+
+            except Exception as e:
+                result["failed"] += 1
+                result["errors"].append(f"UID {uid} ({action}): {e}")
+                log.warning("Flag-Fehler fuer UID %s (%s): %s", uid, action, e)
+
+        # --- Phase 4: Batch-EXPUNGE (nur mit UIDPLUS) ---
+        if deleted_uids and has_uidplus:
             uid_set = ",".join(deleted_uids)
-            if has_uidplus:
-                try:
-                    mail.uid('expunge', uid_set)
-                except Exception as e:
-                    log.warning("UID EXPUNGE fehlgeschlagen, Fallback auf EXPUNGE: %s", e)
-                    try:
-                        mail.expunge()
-                    except Exception as e2:
-                        log.warning("Expunge fehlgeschlagen: %s", e2)
-            else:
-                log.info("Server hat kein UIDPLUS – nutze regulaeres EXPUNGE. "
-                         "Bereits vorher als Deleted markierte Mails koennten mit-entfernt werden.")
-                try:
-                    mail.expunge()
-                except Exception as e:
-                    log.warning("Expunge fehlgeschlagen: %s", e)
+            try:
+                mail.uid('expunge', uid_set)
+            except Exception as e:
+                log.warning("UID EXPUNGE fehlgeschlagen (Originale bleiben als "
+                            "\\Deleted markiert): %s", e)
+        elif deleted_uids:
+            log.info("Server hat kein UIDPLUS – %d Originale als \\Deleted markiert "
+                     "(werden beim naechsten Ordner-Komprimieren entfernt).",
+                     len(deleted_uids))
 
     except Exception as e:
         result["errors"].append(f"IMAP-Verbindungsfehler: {e}")

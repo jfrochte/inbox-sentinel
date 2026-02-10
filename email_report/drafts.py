@@ -16,8 +16,13 @@ Drei Funktionen:
 # ============================================================
 import imaplib
 import re
+import email.charset as _charset
 from email.mime.text import MIMEText
 from email.utils import formatdate
+
+# Thunderbird erwartet quoted-printable fuer editierbare Drafts (nicht base64)
+_QP_UTF8 = _charset.Charset('utf-8')
+_QP_UTF8.body_encoding = _charset.QP
 
 import requests
 
@@ -127,11 +132,18 @@ def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
     if not _REPLY_PREFIX_RE.match(subject):
         subject = f"Re: {subject}"
 
-    msg = MIMEText(draft_body, "plain", "utf-8")
+    # [Sentinel-Entwurf] Prefix: kennzeichnet LLM-generierte Drafts
+    subject = f"[Sentinel-Entwurf] {subject}"
+
+    msg = MIMEText(draft_body, "plain", _charset=_QP_UTF8)
     msg["From"] = f"{person_name} <{from_email}>"
     msg["To"] = (newest.get("from") or "").strip()
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
+
+    # Client-spezifische Draft-Header fuer Editierbarkeit
+    msg["X-Mozilla-Draft-Info"] = "internal/draft; vcard=0; receipt=0; DSN=0; uuencode=0; attachmentreminder=0; deliveryformat=4"
+    msg["X-Uniform-Type-Identifier"] = "com.apple.mail-draft"
 
     # In-Reply-To: Message-ID der neuesten Mail
     newest_mid = (newest.get("message_id") or "").strip()
@@ -153,10 +165,37 @@ def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
 # ============================================================
 # 3) Drafts per IMAP APPEND speichern
 # ============================================================
+def _detect_drafts_folder(mail) -> str | None:
+    """Erkennt den \\Drafts Special-Use Ordner via IMAP LIST (RFC 6154).
+
+    Gibt den Ordnernamen zurueck oder None wenn nicht erkannt.
+    """
+    try:
+        status, folder_list = mail.list()
+        if status != "OK" or not folder_list:
+            return None
+        for item in folder_list:
+            if item is None:
+                continue
+            text = item.decode("utf-8", errors="replace") if isinstance(item, bytes) else str(item)
+            if "\\Drafts" in text:
+                # Format: '(\HasNoChildren \Drafts) "/" "Entwuerfe"'
+                # oder:   '(\HasNoChildren \Drafts) "." Drafts'
+                m = re.search(r'\) "." (?:"([^"]+)"|(\S+))$', text)
+                if m:
+                    return m.group(1) or m.group(2)
+        return None
+    except Exception:
+        return None
+
+
 def imap_save_drafts(username: str, password: str, imap_server: str, imap_port: int,
                      drafts_folder: str, draft_messages: list) -> dict:
     """
     Speichert Draft-Messages per IMAP APPEND im Drafts-Ordner.
+
+    Erkennt automatisch den \\Drafts Special-Use Ordner (RFC 6154).
+    Fallback: drafts_folder Parameter.
 
     draft_messages: Liste von (subject_log, Message) Tupeln.
 
@@ -171,30 +210,38 @@ def imap_save_drafts(username: str, password: str, imap_server: str, imap_port: 
     try:
         mail.login(username, password)
 
-        # Drafts-Ordner erstellen falls noetig
-        try:
-            status_c, _ = mail.create(drafts_folder)
-            if status_c == "OK":
-                log.info("IMAP-Ordner erstellt: %s", drafts_folder)
-        except Exception:
-            pass  # Existiert vermutlich schon
-        # Subscribe: ohne Abo zeigen viele Clients den Ordner nicht an
-        try:
-            mail.subscribe(drafts_folder)
-        except Exception:
-            pass
+        # Auto-Detect: \Drafts Special-Use Ordner (RFC 6154)
+        detected = _detect_drafts_folder(mail)
+        if detected:
+            actual_folder = detected
+            log.info("Drafts: \\Drafts Ordner erkannt: %s", actual_folder)
+        else:
+            actual_folder = drafts_folder
+            log.info("Drafts: Kein \\Drafts Ordner erkannt, nutze Fallback: %s",
+                     actual_folder)
+            # Fallback-Ordner erstellen falls noetig
+            try:
+                status_c, _ = mail.create(actual_folder)
+                if status_c == "OK":
+                    log.info("IMAP-Ordner erstellt: %s", actual_folder)
+            except Exception:
+                pass  # Existiert vermutlich schon
+            try:
+                mail.subscribe(actual_folder)
+            except Exception:
+                pass
 
         for subject_log, msg in draft_messages:
             try:
                 status, _ = mail.append(
-                    drafts_folder,
-                    "(\\Draft)",
+                    actual_folder,
+                    "(\\Draft \\Seen)",
                     None,
                     msg.as_bytes(),
                 )
                 if status == "OK":
                     result["saved"] += 1
-                    log.info("Draft gespeichert: %s", subject_log)
+                    log.info("Draft gespeichert in '%s': %s", actual_folder, subject_log)
                 else:
                     result["failed"] += 1
                     result["errors"].append(f"APPEND fehlgeschlagen fuer: {subject_log}")

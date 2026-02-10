@@ -58,7 +58,7 @@ from email_report.utils import (
     append_secure,
     write_jsonl,
 )
-from email_report.imap_client import imap_fetch_emails_for_range, imap_move_emails
+from email_report.imap_client import imap_fetch_emails_for_range, imap_safe_sort
 from email_report.llm import _analyze_thread_guaranteed
 from email_report.threading import group_into_threads
 from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block, BLOCK_SEPARATOR
@@ -188,7 +188,8 @@ def main():
     if tqdm is not None:
         iterator = tqdm(threads, desc="Verarbeite Threads")
 
-    sort_moves = []  # Sammelt {"uid": ..., "folder": ...} fuer Auto-Sort
+    sort_moves = []  # Sammelt {"uid": ..., "folder": ..., "priority": ...} fuer Auto-Sort
+    inbox_flags = []  # Sammelt {"uid": ..., "action": "seen"|"flagged"} fuer INBOX-Flags
     draft_queue = []  # Sammelt (subject_log, Message) fuer IMAP APPEND
     draft_stats = {"generated": 0, "skipped": 0, "failed": 0}
 
@@ -238,12 +239,27 @@ def main():
         # parsed_block einmalig berechnen (wird von auto_sort UND auto_draft genutzt)
         parsed_block = _parse_llm_summary_block(final_block)
 
-        # --- Auto-Sort ---
+        # --- Auto-Sort + Inbox-Flags ---
         if cfg.auto_sort and thread_uids:
             cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
+            prio = 3
+            try:
+                prio = int(parsed_block.get("priority") or 3)
+            except (ValueError, TypeError):
+                pass
+
             if cat in DEFAULT_SORT_FOLDERS:
+                # SPAM/PHISHING → in Zielordner verschieben (mit X-Priority)
                 for uid in thread_uids:
-                    sort_moves.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat]})
+                    sort_moves.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat], "priority": prio})
+            elif cat == "FYI":
+                # FYI → als gelesen markieren in INBOX
+                for uid in thread_uids:
+                    inbox_flags.append({"uid": uid, "action": "seen"})
+            elif cat == "ACTIONABLE" and prio <= 2:
+                # Hohe Prioritaet → Stern/Flag in INBOX
+                for uid in thread_uids:
+                    inbox_flags.append({"uid": uid, "action": "flagged"})
 
         # --- Auto-Draft ---
         if cfg.auto_draft and draft_prompt_base:
@@ -351,19 +367,26 @@ def main():
                 log.warning("Auto-Draft fehlgeschlagen: %s", e)
 
         # --- Auto-Sort: NACH dem Versand (Report hat Vorrang) ---
-        if sent_ok and cfg.auto_sort and sort_moves:
-            log.info("Auto-Sort: %d E-Mail(s) zum Verschieben.", len(sort_moves))
+        if sent_ok and cfg.auto_sort and (sort_moves or inbox_flags):
+            log.info("Auto-Sort: %d zum Verschieben, %d Inbox-Flags.",
+                     len(sort_moves), len(inbox_flags))
             try:
-                sort_result = imap_move_emails(
+                sort_result = imap_safe_sort(
                     username=cfg.username,
                     password=cfg.password,
                     imap_server=cfg.imap_server,
                     imap_port=cfg.imap_port,
                     mailbox=cfg.mailbox,
-                    moves=sort_moves,
+                    sort_moves=sort_moves,
+                    inbox_flags=inbox_flags,
                 )
-                log.info("Auto-Sort Ergebnis: %d verschoben, %d fehlgeschlagen.",
-                         sort_result["moved"], sort_result["failed"])
+                log.info("Auto-Sort Ergebnis: %d sortiert, %d geflaggt, "
+                         "%d uebersprungen, %d fehlgeschlagen.",
+                         sort_result["sorted"], sort_result["flagged"],
+                         sort_result["skipped"], sort_result["failed"])
+                if not sort_result["keywords_supported"]:
+                    log.warning("Auto-Sort: Server unterstuetzt keine Keywords – "
+                                "Idempotenz nicht moeglich.")
                 if sort_result["errors"]:
                     for err in sort_result["errors"]:
                         log.warning("Auto-Sort Fehler: %s", err)
