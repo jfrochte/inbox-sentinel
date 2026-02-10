@@ -276,10 +276,12 @@ def _fetch_message_data(mail, uid_bytes):
             return None, None, None
 
         # INTERNALDATE aus Metadaten extrahieren
+        # Wichtig: imaplib.Time2Internaldate() erwartet das volle IMAP-Format
+        # 'INTERNALDATE "DD-Mon-YYYY HH:MM:SS +ZZZZ"' (nicht nur den Datumswert).
         internaldate = None
-        m = re.search(r'INTERNALDATE "([^"]+)"', meta_str)
+        m = re.search(r'INTERNALDATE "[^"]+"', meta_str)
         if m:
-            internaldate = m.group(1)
+            internaldate = m.group(0)
 
         # FLAGS extrahieren und filtern
         original_flags = []
@@ -385,17 +387,25 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
             uid_b = uid.encode() if isinstance(uid, str) else uid
 
             try:
-                # Idempotenz: bereits getaggte Mails ueberspringen
-                if kw_supported and _is_already_tagged(mail, uid_b, SENTINEL_KEYWORD):
-                    result["skipped"] += 1
-                    continue
-
                 # FETCH rohe Nachricht + INTERNALDATE + FLAGS
                 raw_bytes, internaldate, orig_flags = _fetch_message_data(mail, uid_b)
                 if not raw_bytes:
                     result["failed"] += 1
                     result["errors"].append(f"UID {uid}: FETCH fehlgeschlagen")
                     continue
+
+                # Idempotenz: bereits getaggte Mails ueberspringen —
+                # ABER nur wenn X-Priority schon vorhanden ist (Migration).
+                if kw_supported and _is_already_tagged(mail, uid_b, SENTINEL_KEYWORD):
+                    header_end = raw_bytes.find(b"\r\n\r\n")
+                    if header_end < 0:
+                        header_end = raw_bytes.find(b"\n\n")
+                    header_section = raw_bytes[:header_end] if header_end > 0 else raw_bytes[:2048]
+                    if b"X-Priority:" in header_section or b"x-priority:" in header_section.lower():
+                        result["skipped"] += 1
+                        continue
+                    # Getaggt aber ohne X-Priority → re-process (Migration)
+                    log.debug("UID %s: $Sentinel_Sorted aber kein X-Priority, re-process", uid)
 
                 # X-Priority Header injizieren
                 modified = _inject_x_priority(raw_bytes, priority)
@@ -412,12 +422,24 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                 flags_str = "(" + " ".join(sorted(combined_flags)) + ")"
 
                 # APPEND in Zielordner (mit kombinierten Flags + Original-Datum)
-                status_a, _ = mail.append(
-                    folder_name,
-                    flags_str,
-                    internaldate,
-                    modified,
-                )
+                try:
+                    status_a, _ = mail.append(
+                        folder_name,
+                        flags_str,
+                        internaldate,
+                        modified,
+                    )
+                except ValueError:
+                    # Fallback: INTERNALDATE konnte nicht geparst werden
+                    # → ohne Datum appenden (Server nutzt aktuellen Zeitstempel)
+                    log.debug("INTERNALDATE-Parse fehlgeschlagen fuer UID %s, "
+                              "Fallback auf Server-Datum", uid)
+                    status_a, _ = mail.append(
+                        folder_name,
+                        flags_str,
+                        None,
+                        modified,
+                    )
                 if status_a != "OK":
                     result["failed"] += 1
                     result["errors"].append(f"UID {uid}: APPEND nach {folder_name} fehlgeschlagen")
