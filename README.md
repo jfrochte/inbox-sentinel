@@ -21,7 +21,7 @@ Jump to: [English](#english) | [Deutsch](#deutsch)
 
 ### What it does
 
-inbox-sentinel connects to an IMAP mailbox, fetches recent emails, groups them into conversation threads, and sends each thread to a local LLM (via Ollama) for analysis. The LLM classifies each thread by category, priority, and addressing. The results are compiled into an HTML report that is emailed back to you. Optionally, SPAM/PHISHING emails are moved to quarantine folders (with X-Priority headers for client display), FYI emails are marked as read, high-priority emails get a star/flag, LLM-generated reply drafts are saved to your Drafts folder, and a per-sender knowledge base is built to provide context for future analyses.
+inbox-sentinel connects to an IMAP mailbox, fetches recent emails, groups them into conversation threads, and sends each thread to a local LLM (via Ollama) for analysis. The LLM classifies each thread by category, priority, and addressing. The results are compiled into an HTML report that is emailed back to you. Optionally, all emails receive an X-Priority header (visible in Thunderbird, Outlook, Apple Mail), SPAM/PHISHING emails are moved to quarantine folders, FYI emails are marked as read, high-priority emails get a star/flag, LLM-generated reply drafts are saved to your Drafts folder, and a per-sender knowledge base is built to provide context for future analyses.
 
 ### Key features
 
@@ -29,7 +29,7 @@ inbox-sentinel connects to an IMAP mailbox, fetches recent emails, groups them i
 - **Threading** -- emails are grouped into conversation threads (Union-Find on headers + subject fallback)
 - **Priority 1-5** -- urgent items surface first in the report
 - **Categories** -- SPAM, PHISHING, FYI, ACTIONABLE with deterministic post-processing rules enforced in code
-- **Auto-sort** -- crash-safe IMAP post-processing: SPAM/PHISHING moved to quarantine (with X-Priority header), FYI marked as read, high-priority ACTIONABLE starred. Uses verified copy-before-delete with `$Sentinel_Sorted` keyword for idempotency
+- **Auto-sort** -- crash-safe IMAP post-processing: every email gets an X-Priority header injected (1-5, visible in most clients). SPAM/PHISHING moved to quarantine, FYI marked as read, high-priority ACTIONABLE starred. Uses verified copy-before-delete; re-running with a better model overwrites previous priorities
 - **Auto-draft** -- optional LLM-generated reply drafts saved to your IMAP Drafts folder (auto-detects `\Drafts` special-use folder per RFC 6154, `[Sentinel-Entwurf]` subject prefix, opt-in)
 - **Auto-contacts** -- optional sender knowledge base built from emails; provides context to analysis and draft prompts (opt-in)
 - **Profiles** -- save/load server and account settings as JSON profiles
@@ -124,7 +124,7 @@ contacts/              -- Per-sender JSON profiles (excluded from git)
 7. Sort results by priority, generate HTML report
 8. Send report via SMTP
 9. Save drafts to IMAP Drafts folder (auto-detects `\Drafts` special-use, optional)
-10. Auto-sort: SPAM/PHISHING → quarantine (FETCH + X-Priority inject + APPEND + verify + delete), FYI → `\Seen`, ACTIONABLE prio 1-2 → `\Flagged` (optional)
+10. Auto-sort: all emails get X-Priority injected via FETCH + APPEND + verify + delete. SPAM/PHISHING → quarantine + `\Seen`, FYI → `\Seen`, ACTIONABLE prio 1-2 → `\Flagged`. Re-running overwrites priorities (optional)
 
 ### Configuration
 
@@ -142,7 +142,7 @@ Key environment variables:
 ### Known limitations
 
 - LLM classifications are not reliable -- the model may miscategorize emails. Deterministic rules in code correct the most critical cases (SPAM/PHISHING priority, self-sent detection, addressing), but category assignment still depends on the LLM.
-- Auto-sort uses a crash-safe copy-before-delete approach: the copy in the target folder is verified before the original is marked as deleted. With UIDPLUS (RFC 4315), only our specific UIDs are expunged; without UIDPLUS, originals are only marked `\Deleted` (no EXPUNGE) and cleaned up by the server/client later. The `$Sentinel_Sorted` keyword ensures idempotency across runs.
+- Auto-sort uses a crash-safe copy-before-delete approach: the copy in the target folder is verified before the original is marked as deleted. With UIDPLUS (RFC 4315), only our specific UIDs are expunged; without UIDPLUS, originals are only marked `\Deleted` (no EXPUNGE) and cleaned up by the server/client later. Each run re-processes all emails in the date range so that priorities can be updated by re-running with a better model.
 - The prompt and deterministic output fields (Summary, Context, Actions) are in German. The prompt instructions are in English.
 - Tested primarily with Dovecot-based IMAP servers. Other servers may behave differently.
 
@@ -172,7 +172,7 @@ Developed by human with AI assistance (e.g. Claude, Anthropic).
 
 ### Was es tut
 
-inbox-sentinel verbindet sich mit einer IMAP-Mailbox, holt aktuelle E-Mails, gruppiert sie in Konversations-Threads und schickt jeden Thread an ein lokales LLM (via Ollama) zur Analyse. Das LLM klassifiziert jeden Thread nach Kategorie, Prioritaet und Adressierung. Die Ergebnisse werden in einen HTML-Report kompiliert und per E-Mail zurueckgeschickt. Optional werden SPAM/PHISHING-E-Mails in Quarantaene-Ordner verschoben (mit X-Priority-Header fuer Client-Anzeige), FYI-E-Mails als gelesen markiert, hochprioritaere E-Mails mit Stern geflaggt, LLM-generierte Antwortentwuerfe im Drafts-Ordner abgelegt und eine Sender-Wissensbank aufgebaut, die kuenftige Analysen mit Kontext versorgt.
+inbox-sentinel verbindet sich mit einer IMAP-Mailbox, holt aktuelle E-Mails, gruppiert sie in Konversations-Threads und schickt jeden Thread an ein lokales LLM (via Ollama) zur Analyse. Das LLM klassifiziert jeden Thread nach Kategorie, Prioritaet und Adressierung. Die Ergebnisse werden in einen HTML-Report kompiliert und per E-Mail zurueckgeschickt. Optional erhalten alle E-Mails einen X-Priority-Header (sichtbar in Thunderbird, Outlook, Apple Mail), SPAM/PHISHING-E-Mails werden in Quarantaene-Ordner verschoben, FYI-E-Mails als gelesen markiert, hochprioritaere E-Mails mit Stern geflaggt, LLM-generierte Antwortentwuerfe im Drafts-Ordner abgelegt und eine Sender-Wissensbank aufgebaut, die kuenftige Analysen mit Kontext versorgt.
 
 ### Kernfunktionen
 
@@ -180,7 +180,7 @@ inbox-sentinel verbindet sich mit einer IMAP-Mailbox, holt aktuelle E-Mails, gru
 - **Threading** -- E-Mails werden zu Konversations-Threads gruppiert (Union-Find auf Header + Betreff-Fallback)
 - **Prioritaet 1-5** -- dringende Eintraege erscheinen zuerst im Report
 - **Kategorien** -- SPAM, PHISHING, FYI, ACTIONABLE mit deterministischen Post-Processing-Regeln im Code
-- **Auto-Sort** -- crash-sichere IMAP-Nachbearbeitung: SPAM/PHISHING in Quarantaene (mit X-Priority-Header), FYI als gelesen markiert, hochprioritaere ACTIONABLE mit Stern. Nutzt verifiziertes Copy-before-Delete mit `$Sentinel_Sorted`-Keyword fuer Idempotenz
+- **Auto-Sort** -- crash-sichere IMAP-Nachbearbeitung: jede E-Mail erhaelt einen X-Priority-Header (1-5, sichtbar in den meisten Clients). SPAM/PHISHING in Quarantaene, FYI als gelesen markiert, hochprioritaere ACTIONABLE mit Stern. Nutzt verifiziertes Copy-before-Delete; erneuter Lauf mit besserem Modell ueberschreibt vorherige Prioritaeten
 - **Auto-Draft** -- optionale LLM-generierte Antwortentwuerfe im IMAP-Drafts-Ordner (erkennt `\Drafts` Special-Use-Ordner per RFC 6154, `[Sentinel-Entwurf]`-Prefix im Betreff, opt-in)
 - **Auto-Contacts** -- optionale Sender-Wissensbank aus E-Mails; liefert Kontext fuer Analyse- und Draft-Prompts (opt-in)
 - **Profile** -- Server- und Account-Einstellungen als JSON-Profile speichern/laden
@@ -275,7 +275,7 @@ contacts/              -- Sender-Profile als JSON (nicht in git)
 7. Nach Prioritaet sortieren, HTML-Report generieren
 8. Report per SMTP verschicken
 9. Drafts in IMAP-Drafts-Ordner speichern (erkennt `\Drafts` Special-Use automatisch, optional)
-10. Auto-Sort: SPAM/PHISHING → Quarantaene (FETCH + X-Priority + APPEND + verify + delete), FYI → `\Seen`, ACTIONABLE Prio 1-2 → `\Flagged` (optional)
+10. Auto-Sort: alle E-Mails erhalten X-Priority via FETCH + APPEND + verify + delete. SPAM/PHISHING → Quarantaene + `\Seen`, FYI → `\Seen`, ACTIONABLE Prio 1-2 → `\Flagged`. Erneuter Lauf ueberschreibt Prioritaeten (optional)
 
 ### Konfiguration
 
@@ -293,7 +293,7 @@ Wichtige Environment-Variablen:
 ### Bekannte Einschraenkungen
 
 - LLM-Klassifikationen sind nicht zuverlaessig -- das Modell kann E-Mails falsch einordnen. Deterministische Regeln im Code korrigieren die kritischsten Faelle (SPAM/PHISHING-Prioritaet, Self-Sent-Erkennung, Addressing), aber die Kategorie-Zuordnung haengt weiterhin vom LLM ab.
-- Auto-Sort nutzt einen crash-sicheren Copy-before-Delete-Ansatz: die Kopie im Zielordner wird verifiziert bevor das Original als geloescht markiert wird. Mit UIDPLUS (RFC 4315) werden nur unsere spezifischen UIDs entfernt; ohne UIDPLUS werden Originale nur als `\Deleted` markiert (kein EXPUNGE) und spaeter vom Server/Client aufgeraeumt. Das `$Sentinel_Sorted`-Keyword stellt Idempotenz ueber mehrere Laeufe sicher.
+- Auto-Sort nutzt einen crash-sicheren Copy-before-Delete-Ansatz: die Kopie im Zielordner wird verifiziert bevor das Original als geloescht markiert wird. Mit UIDPLUS (RFC 4315) werden nur unsere spezifischen UIDs entfernt; ohne UIDPLUS werden Originale nur als `\Deleted` markiert (kein EXPUNGE) und spaeter vom Server/Client aufgeraeumt. Jeder Lauf verarbeitet alle E-Mails im Zeitraum neu, sodass Prioritaeten durch erneuten Lauf mit besserem Modell aktualisiert werden koennen.
 - Der Prompt und die deterministischen Ausgabefelder (Summary, Context, Actions) sind auf Deutsch. Die Prompt-Anweisungen sind auf Englisch.
 - Primaer mit Dovecot-basierten IMAP-Servern getestet. Andere Server koennten sich anders verhalten.
 
