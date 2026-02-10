@@ -250,15 +250,15 @@ def _inject_x_priority(raw_bytes: bytes, priority: int) -> bytes:
     return raw_bytes[:header_end] + x_prio + raw_bytes[header_end:]
 
 
-def _fetch_raw_with_date(mail, uid_bytes):
-    """Holt rohe Nachricht + INTERNALDATE per UID FETCH.
+def _fetch_message_data(mail, uid_bytes):
+    """Holt rohe Nachricht, INTERNALDATE und FLAGS per UID FETCH.
 
-    Returns: (raw_bytes, internaldate_str) oder (None, None) bei Fehler.
+    Returns: (raw_bytes, internaldate_str, flags_list) oder (None, None, None).
     """
     try:
-        status, data = mail.uid('fetch', uid_bytes, '(BODY.PEEK[] INTERNALDATE)')
+        status, data = mail.uid('fetch', uid_bytes, '(BODY.PEEK[] INTERNALDATE FLAGS)')
         if status != "OK" or not data:
-            return None, None
+            return None, None, None
 
         raw_bytes = None
         meta_str = ""
@@ -273,7 +273,7 @@ def _fetch_raw_with_date(mail, uid_bytes):
                 break
 
         if not raw_bytes:
-            return None, None
+            return None, None, None
 
         # INTERNALDATE aus Metadaten extrahieren
         internaldate = None
@@ -281,45 +281,53 @@ def _fetch_raw_with_date(mail, uid_bytes):
         if m:
             internaldate = m.group(1)
 
-        return raw_bytes, internaldate
+        # FLAGS extrahieren und filtern
+        original_flags = []
+        m_flags = re.search(r'FLAGS \(([^)]*)\)', meta_str)
+        if m_flags:
+            for flag in m_flags.group(1).split():
+                # \Recent kann nicht gesetzt werden, \Deleted wollen wir nicht uebernehmen
+                if flag not in ("\\Recent", "\\Deleted"):
+                    original_flags.append(flag)
+
+        return raw_bytes, internaldate, original_flags
     except Exception as e:
         log.debug("FETCH fehlgeschlagen fuer UID %s: %s", uid_bytes, e)
-        return None, None
+        return None, None, None
 
 
 def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: int,
-                   mailbox: str, sort_moves: list[dict],
-                   inbox_flags: list[dict] | None = None) -> dict:
+                   mailbox: str, sort_actions: list[dict]) -> dict:
     """
     Crash-sichere IMAP-Nachbearbeitung in einer Session.
 
-    sort_moves: [{"uid": str, "folder": str, "priority": int}]
-        FETCH → X-Priority injizieren → APPEND in Zielordner → verify →
-        $Sentinel_Sorted taggen → \\Seen + \\Deleted auf Original →
-        UID EXPUNGE (nur mit UIDPLUS, sonst nur \\Deleted).
+    Jede Aktion durchlaeuft denselben Flow:
+      FETCH → X-Priority injizieren → APPEND (mit Original-Flags + extra_flags)
+      → verify → \\Deleted auf Original → Batch UID EXPUNGE (nur mit UIDPLUS).
 
-    inbox_flags: [{"uid": str, "action": "seen"|"flagged"}]
-        STORE \\Seen (FYI) oder \\Flagged (ACTIONABLE Prio 1-2) →
-        $Sentinel_Sorted taggen.
+    sort_actions: [{"uid": str, "folder": str, "priority": int,
+                    "extra_flags": [str]}]
+      - folder: Zielordner (INBOX fuer in-place Ersetzung, Spam/Quarantine fuer Move)
+      - priority: X-Priority Wert (1-5) fuer den Header
+      - extra_flags: zusaetzliche Flags (z.B. ["\\\\Seen"], ["\\\\Flagged"])
 
     Sicherheitsgarantien:
     - Kein Email-Verlust: Original wird erst geloescht wenn Kopie verifiziert
-    - Crash-sicher: Abbruch → schlimmstenfalls Duplikat im Zielordner
+    - Crash-sicher: Abbruch → schlimmstenfalls Duplikat
     - Idempotent: $Sentinel_Sorted verhindert Doppelverarbeitung
     - Server-kompatibel: ohne UIDPLUS nur \\Deleted (kein EXPUNGE)
 
-    Gibt {"sorted": int, "flagged": int, "skipped": int, "failed": int,
+    Gibt {"processed": int, "skipped": int, "failed": int,
           "errors": [str], "keywords_supported": bool, "has_uidplus": bool}
     zurueck.
     """
     from email_report.config import SENTINEL_KEYWORD
 
-    result = {"sorted": 0, "flagged": 0, "skipped": 0, "failed": 0,
+    result = {"processed": 0, "skipped": 0, "failed": 0,
               "errors": [], "keywords_supported": False, "has_uidplus": False}
 
-    if not sort_moves and not inbox_flags:
+    if not sort_actions:
         return result
-    inbox_flags = inbox_flags or []
 
     mail = imaplib.IMAP4_SSL(imap_server, imap_port)
     try:
@@ -344,11 +352,11 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
         kw_supported = _check_keyword_support(mail)
         result["keywords_supported"] = kw_supported
 
-        # --- Phase 1: Zielordner erstellen ---
+        # --- Phase 1: Zielordner erstellen (nur nicht-INBOX) ---
         created_folders = set()
-        for move in sort_moves:
-            folder_name = move.get("folder", "")
-            if not folder_name or folder_name in created_folders:
+        for action in sort_actions:
+            folder_name = action.get("folder", "")
+            if not folder_name or folder_name == mailbox or folder_name in created_folders:
                 continue
             try:
                 status_c, _ = mail.create(folder_name)
@@ -362,14 +370,15 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                 pass
             created_folders.add(folder_name)
 
-        # --- Phase 2: Sort-Moves (SPAM/PHISHING) ---
-        # FETCH → X-Priority → APPEND → verify → tag → \Seen → \Deleted
+        # --- Phase 2: Alle Actions verarbeiten ---
+        # FETCH → X-Priority → APPEND → verify → \Deleted auf Original
         deleted_uids = []  # Fuer Batch-EXPUNGE am Ende
 
-        for move in sort_moves:
-            uid = move.get("uid", "")
-            folder_name = move.get("folder", "")
-            priority = move.get("priority", 5)
+        for action in sort_actions:
+            uid = action.get("uid", "")
+            folder_name = action.get("folder", "")
+            priority = action.get("priority", 3)
+            extra_flags = action.get("extra_flags", [])
             if not uid or not folder_name:
                 continue
 
@@ -381,8 +390,8 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                     result["skipped"] += 1
                     continue
 
-                # FETCH rohe Nachricht + INTERNALDATE
-                raw_bytes, internaldate = _fetch_raw_with_date(mail, uid_b)
+                # FETCH rohe Nachricht + INTERNALDATE + FLAGS
+                raw_bytes, internaldate, orig_flags = _fetch_message_data(mail, uid_b)
                 if not raw_bytes:
                     result["failed"] += 1
                     result["errors"].append(f"UID {uid}: FETCH fehlgeschlagen")
@@ -391,10 +400,21 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                 # X-Priority Header injizieren
                 modified = _inject_x_priority(raw_bytes, priority)
 
-                # APPEND in Zielordner (mit \Seen + Original-Datum)
+                # Flags zusammenbauen: Original + extra + $Sentinel_Sorted
+                combined_flags = set(orig_flags)
+                for ef in extra_flags:
+                    combined_flags.add(ef)
+                if kw_supported:
+                    combined_flags.add(SENTINEL_KEYWORD)
+                # \Deleted nicht auf die neue Kopie
+                combined_flags.discard("\\Deleted")
+                combined_flags.discard("\\Recent")
+                flags_str = "(" + " ".join(sorted(combined_flags)) + ")"
+
+                # APPEND in Zielordner (mit kombinierten Flags + Original-Datum)
                 status_a, _ = mail.append(
                     folder_name,
-                    "(\\Seen)",
+                    flags_str,
                     internaldate,
                     modified,
                 )
@@ -404,17 +424,6 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                     continue
 
                 # --- Kopie verifiziert, jetzt Original aufraumen ---
-
-                # $Sentinel_Sorted taggen (Idempotenz fuer naechsten Lauf)
-                if kw_supported:
-                    _tag_as_sorted(mail, uid_b, SENTINEL_KEYWORD)
-
-                # \Seen auf Original (gelesen in INBOX)
-                try:
-                    mail.uid('store', uid_b, '+FLAGS', '(\\Seen)')
-                except Exception:
-                    pass
-
                 # \Deleted auf Original
                 try:
                     mail.uid('store', uid_b, '+FLAGS', '(\\Deleted)')
@@ -422,45 +431,14 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                 except Exception:
                     pass
 
-                result["sorted"] += 1
+                result["processed"] += 1
 
             except Exception as e:
                 result["failed"] += 1
                 result["errors"].append(f"UID {uid}: {e}")
                 log.warning("Sort-Fehler fuer UID %s nach %s: %s", uid, folder_name, e)
 
-        # --- Phase 3: Inbox-Flags (FYI → \Seen, ACTIONABLE Prio 1-2 → \Flagged) ---
-        for flag_op in inbox_flags:
-            uid = flag_op.get("uid", "")
-            action = flag_op.get("action", "")
-            if not uid or not action:
-                continue
-
-            uid_b = uid.encode() if isinstance(uid, str) else uid
-
-            try:
-                # Idempotenz: bereits getaggte Mails ueberspringen
-                if kw_supported and _is_already_tagged(mail, uid_b, SENTINEL_KEYWORD):
-                    result["skipped"] += 1
-                    continue
-
-                if action == "seen":
-                    mail.uid('store', uid_b, '+FLAGS', '(\\Seen)')
-                elif action == "flagged":
-                    mail.uid('store', uid_b, '+FLAGS', '(\\Flagged)')
-
-                # $Sentinel_Sorted taggen
-                if kw_supported:
-                    _tag_as_sorted(mail, uid_b, SENTINEL_KEYWORD)
-
-                result["flagged"] += 1
-
-            except Exception as e:
-                result["failed"] += 1
-                result["errors"].append(f"UID {uid} ({action}): {e}")
-                log.warning("Flag-Fehler fuer UID %s (%s): %s", uid, action, e)
-
-        # --- Phase 4: Batch-EXPUNGE (nur mit UIDPLUS) ---
+        # --- Phase 3: Batch-EXPUNGE (nur mit UIDPLUS) ---
         if deleted_uids and has_uidplus:
             uid_set = ",".join(deleted_uids)
             try:

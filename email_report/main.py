@@ -188,8 +188,7 @@ def main():
     if tqdm is not None:
         iterator = tqdm(threads, desc="Verarbeite Threads")
 
-    sort_moves = []  # Sammelt {"uid": ..., "folder": ..., "priority": ...} fuer Auto-Sort
-    inbox_flags = []  # Sammelt {"uid": ..., "action": "seen"|"flagged"} fuer INBOX-Flags
+    sort_actions = []  # Sammelt {"uid", "folder", "priority", "extra_flags"} fuer Auto-Sort
     draft_queue = []  # Sammelt (subject_log, Message) fuer IMAP APPEND
     draft_stats = {"generated": 0, "skipped": 0, "failed": 0}
 
@@ -239,7 +238,7 @@ def main():
         # parsed_block einmalig berechnen (wird von auto_sort UND auto_draft genutzt)
         parsed_block = _parse_llm_summary_block(final_block)
 
-        # --- Auto-Sort + Inbox-Flags ---
+        # --- Auto-Sort: Einheitliche Actions-Liste ---
         if cfg.auto_sort and thread_uids:
             cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
             prio = 3
@@ -249,17 +248,25 @@ def main():
                 pass
 
             if cat in DEFAULT_SORT_FOLDERS:
-                # SPAM/PHISHING → in Zielordner verschieben (mit X-Priority)
+                # SPAM/PHISHING → in Quarantaene-Ordner (mit X-Priority + \Seen)
                 for uid in thread_uids:
-                    sort_moves.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat], "priority": prio})
+                    sort_actions.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat],
+                                         "priority": prio, "extra_flags": ["\\Seen"]})
             elif cat == "FYI":
-                # FYI → als gelesen markieren in INBOX
+                # FYI → in INBOX ersetzen (X-Priority + \Seen)
                 for uid in thread_uids:
-                    inbox_flags.append({"uid": uid, "action": "seen"})
+                    sort_actions.append({"uid": uid, "folder": cfg.mailbox,
+                                         "priority": prio, "extra_flags": ["\\Seen"]})
             elif cat == "ACTIONABLE" and prio <= 2:
-                # Hohe Prioritaet → Stern/Flag in INBOX
+                # Hohe Prioritaet → in INBOX ersetzen (X-Priority + \Flagged)
                 for uid in thread_uids:
-                    inbox_flags.append({"uid": uid, "action": "flagged"})
+                    sort_actions.append({"uid": uid, "folder": cfg.mailbox,
+                                         "priority": prio, "extra_flags": ["\\Flagged"]})
+            elif cat == "ACTIONABLE":
+                # Normale/niedrige Prioritaet → in INBOX ersetzen (nur X-Priority)
+                for uid in thread_uids:
+                    sort_actions.append({"uid": uid, "folder": cfg.mailbox,
+                                         "priority": prio, "extra_flags": []})
 
         # --- Auto-Draft ---
         if cfg.auto_draft and draft_prompt_base:
@@ -367,9 +374,8 @@ def main():
                 log.warning("Auto-Draft fehlgeschlagen: %s", e)
 
         # --- Auto-Sort: NACH dem Versand (Report hat Vorrang) ---
-        if sent_ok and cfg.auto_sort and (sort_moves or inbox_flags):
-            log.info("Auto-Sort: %d zum Verschieben, %d Inbox-Flags.",
-                     len(sort_moves), len(inbox_flags))
+        if sent_ok and cfg.auto_sort and sort_actions:
+            log.info("Auto-Sort: %d E-Mail(s) zu verarbeiten.", len(sort_actions))
             try:
                 sort_result = imap_safe_sort(
                     username=cfg.username,
@@ -377,12 +383,11 @@ def main():
                     imap_server=cfg.imap_server,
                     imap_port=cfg.imap_port,
                     mailbox=cfg.mailbox,
-                    sort_moves=sort_moves,
-                    inbox_flags=inbox_flags,
+                    sort_actions=sort_actions,
                 )
-                log.info("Auto-Sort Ergebnis: %d sortiert, %d geflaggt, "
+                log.info("Auto-Sort Ergebnis: %d verarbeitet, "
                          "%d uebersprungen, %d fehlgeschlagen.",
-                         sort_result["sorted"], sort_result["flagged"],
+                         sort_result["processed"],
                          sort_result["skipped"], sort_result["failed"])
                 if not sort_result["keywords_supported"]:
                     log.warning("Auto-Sort: Server unterstuetzt keine Keywords – "
