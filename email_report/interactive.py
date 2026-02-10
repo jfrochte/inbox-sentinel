@@ -260,14 +260,14 @@ def prompt_all_settings(cfg: Config) -> Config:
     model = prompt_model_select(cfg.model, ollama_url)
 
     # Auto-Sort
-    auto_sort = prompt_bool_with_default("Auto-Sort (Spam/Phishing/FYI in Unterordner verschieben)", cfg.auto_sort)
+    auto_sort = prompt_bool_with_default("Auto-Sort (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_sort)
 
     # Auto-Draft
     auto_draft = prompt_bool_with_default(
         "Auto-Draft (Antwortentwuerfe fuer ACTIONABLE Mails)", cfg.auto_draft)
     drafts_folder = cfg.drafts_folder
     if auto_draft:
-        drafts_folder = prompt_with_default("Drafts-Ordner (IMAP)", cfg.drafts_folder)
+        drafts_folder = prompt_with_default("Drafts-Ordner Fallback (wird automatisch erkannt)", cfg.drafts_folder)
 
     # Auto-Contacts
     auto_contacts = prompt_bool_with_default(
@@ -319,8 +319,6 @@ def print_config_summary(cfg: Config) -> None:
     print(f"  Prompt:     {cfg.prompt_file}")
     print(f"  Auto-Sort:  {cfg.auto_sort}")
     print(f"  Auto-Draft: {cfg.auto_draft}")
-    if cfg.auto_draft:
-        print(f"  Drafts:     {cfg.drafts_folder}")
     print(f"  Contacts:   {cfg.auto_contacts}")
     print("------------------------------")
 
@@ -398,12 +396,12 @@ def prompt_user_settings(cfg: Config) -> Config:
     cfg.ollama_url = ollama_url
     cfg.model = prompt_model_select(cfg.model, ollama_url)
 
-    cfg.auto_sort = prompt_bool_with_default("Auto-Sort (Spam/Phishing/FYI in Unterordner verschieben)", cfg.auto_sort)
+    cfg.auto_sort = prompt_bool_with_default("Auto-Sort (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_sort)
 
     cfg.auto_draft = prompt_bool_with_default(
         "Auto-Draft (Antwortentwuerfe fuer ACTIONABLE Mails)", cfg.auto_draft)
     if cfg.auto_draft:
-        cfg.drafts_folder = prompt_with_default("Drafts-Ordner (IMAP)", cfg.drafts_folder)
+        cfg.drafts_folder = prompt_with_default("Drafts-Ordner Fallback (wird automatisch erkannt)", cfg.drafts_folder)
 
     cfg.auto_contacts = prompt_bool_with_default(
         "Auto-Contacts (Kontakte automatisch aus E-Mails lernen)", cfg.auto_contacts)
