@@ -91,9 +91,9 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
 
         if use_sentdate:
             # SENTSINCE/SENTBEFORE sind standardisiert, aber nicht jeder Server ist 100% kompatibel.
-            query = f"(SENTSINCE {since_str} SENTBEFORE {before_str})"
+            query = f"(NOT DELETED SENTSINCE {since_str} SENTBEFORE {before_str})"
         else:
-            query = f"(SINCE {since_str} BEFORE {before_str})"
+            query = f"(NOT DELETED SINCE {since_str} BEFORE {before_str})"
 
         status, data = mail.uid('search', None, query)
         if status != "OK":
