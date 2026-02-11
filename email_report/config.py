@@ -119,6 +119,7 @@ class Config:
     # Auto-Draft: Antwortentwuerfe fuer ACTIONABLE Mails per LLM generieren
     auto_draft: bool = False
     drafts_folder: str = "Drafts"
+    signature_file: str = ""  # Pfad zu optionaler Signaturdatei fuer Drafts
 
     # Auto-Contacts: Kontakte automatisch aus E-Mails lernen
     auto_contacts: bool = False

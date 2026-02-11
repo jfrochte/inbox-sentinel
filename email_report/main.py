@@ -292,7 +292,8 @@ def main():
                         sender_context=sender_context,
                     )
                     if draft_text:
-                        draft_msg = build_draft_message(thread, draft_text, cfg.from_email, cfg.name)
+                        draft_msg = build_draft_message(thread, draft_text, cfg.from_email, cfg.name,
+                                                        signature_file=cfg.signature_file)
                         subj_log = (parsed_block.get("subject") or newest.get("subject") or "?")[:80]
                         draft_queue.append((subj_log, draft_msg))
                         draft_stats["generated"] += 1

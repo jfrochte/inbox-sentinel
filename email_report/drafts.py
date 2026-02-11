@@ -15,6 +15,7 @@ Drei Funktionen:
 # Externe Abhaengigkeiten
 # ============================================================
 import imaplib
+import os
 import re
 import email.charset as _charset
 from email.mime.text import MIMEText
@@ -130,11 +131,22 @@ def _build_full_quote(newest: dict) -> str:
     date = (newest.get("date") or "").strip()
 
     quoted = "\n".join("> " + line for line in original.splitlines())
-    return f"\nAm {date} schrieb {sender}:\n{quoted}"
+    return f"Am {date} schrieb {sender}:\n{quoted}"
+
+
+def _load_signature(signature_file: str) -> str:
+    """Laedt eine Signaturdatei. Gibt leeren String zurueck wenn nicht vorhanden."""
+    if not signature_file:
+        return ""
+    try:
+        with open(signature_file, "r", encoding="utf-8") as f:
+            return f.read().strip()
+    except (OSError, IOError):
+        return ""
 
 
 def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
-                        person_name: str):
+                        person_name: str, signature_file: str = ""):
     """
     Baut eine RFC-2822-konforme MIME Message fuer den Drafts-Ordner.
     """
@@ -148,9 +160,14 @@ def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
     # [Sentinel-Entwurf] Prefix: kennzeichnet LLM-generierte Drafts
     subject = f"[Sentinel-Entwurf] {subject}"
 
-    # Full-Quote: Original-Mail unter dem LLM-Entwurf
+    # Signatur einfuegen (RFC-konformer Separator: "-- \n")
+    signature = _load_signature(signature_file)
+    if signature:
+        draft_body = draft_body + "\n\n-- \n" + signature
+
+    # Full-Quote: Original-Mail unter dem LLM-Entwurf (zwei Leerzeilen Abstand)
     full_quote = _build_full_quote(newest)
-    full_body = draft_body + full_quote if full_quote else draft_body
+    full_body = draft_body + "\n\n\n" + full_quote if full_quote else draft_body
 
     msg = MIMEText(full_body, "plain", _charset=_QP_UTF8)
     msg["From"] = f"{person_name} <{from_email}>"
