@@ -36,111 +36,78 @@ Do NOT assign facts to the SENDER just because they appear anywhere in the threa
 
 CRITICAL ANTI-HALLUCINATION RULES:
 - ONLY write down facts that are DIRECTLY EVIDENT from the authoritative sources above.
-- If you cannot determine a field from authoritative text, output exactly "nicht bestimmbar" or keep it as-is from the existing profile.
+- If you cannot determine a field from authoritative text, output exactly "nicht bestimmbar" (or keep as-is from existing profile).
 - If an EXISTING PROFILE is provided and you learn NOTHING NEW for a field, copy the existing value EXACTLY word for word. Do NOT rephrase, embellish, or add details.
   Exception: if there is a clear conflict with authoritative evidence in the current email, update the field (see CONFLICT RESOLUTION RULE).
 - NEVER invent titles/roles/affiliations (job title, academic title, department, employer, rank, seniority, leadership roles, etc.).
-- Never "upgrade" or "strengthen" an attribute based on context. If the existing profile says something specific, do NOT change it to a higher-status or different label unless the new label is explicitly present in an authoritative source.
+- Never "upgrade" or "strengthen" an attribute based on context.
 - Do not turn vague clues into concrete facts. If a clue is weak, prefer "nicht bestimmbar".
-- Only use "(vermutlich)" when there IS a concrete clue in authoritative text but it is not definitive.
 
 CONFLICT RESOLUTION RULE:
 If authoritative evidence in the CURRENT email (From line, sender signature, explicit first-person self-statements) clearly contradicts a value in the EXISTING PROFILE, you MUST resolve the conflict:
 - Prefer the authoritative evidence from the current email.
 - Update the conflicting field to the new value.
-- Do NOT keep the old value just because it exists.
 Only override when the new evidence is explicit and high-confidence.
-If the conflict cannot be resolved with high confidence (ambiguous wording, third-person mention, quoted/forwarded content), keep the existing value and do not guess.
+If the conflict cannot be resolved with high confidence, keep the existing value.
 
 HIGH-RISK FIELDS (be extra strict):
-For Role and Profile statements that imply any title/position/affiliation:
+For ORG, TITLE, ROLE:
 - Only state them if explicitly present in From line, signature, or clear self-identification.
-- Otherwise: "nicht bestimmbar" or at most a topical area without claiming a position.
+- Otherwise: "nicht bestimmbar".
 
 ADDRESSING CHECK (inbox reality):
 Look at To/Cc headers and the salutation. The email may be:
 (a) directly addressed to {person},
 (b) sent to a group/mailing list that includes {person},
 (c) addressed to a third party ({person} only CC'd or forwarded a copy).
-For Tone and Communication-Style:
+For NOTE Ton/Stil fields:
 - ONLY describe how the sender communicates with {person} when (a) or when (b) clearly includes a direct salutation to {person}.
-- If (c) or unclear: write "nicht direkt an {person} gerichtet" for Communication-Style and set Tone to "nicht beurteilbar".
-Relationship:
-- Update Relationship only if there is explicit evidence (direct exchange with {person}, explicit relationship wording).
-- CC/mailing list presence alone is NOT evidence of a relationship.
+- If (c) or unclear: set Ton to "nicht beurteilbar" and Stil to "nicht direkt an {person} gerichtet".
 
-PROFILE RULES (structured, evidence-based, useful abstractions):
-- The Profile field must be a SHORT structured summary.
-- Profile MUST be written in exactly two sections with these exact headers:
+NOTE section rules:
+The NOTE field contains metadata and Beobachtet bullets.
+Metadata lines: Ton, Stil, Beziehung — one value per line.
+Beobachtet: observed topics/themes from the sender's messages.
 
-Belegt:
-- <bullet 1>
-- <bullet 2>
-
-Beobachtet:
-- <bullet 1> (Beleg: "<verbatim quote>")
-- <bullet 2> (Beleg: "<verbatim quote>")
-
-Belegt section rules:
-- "Belegt" may contain ONLY hard facts about the sender that are directly evident from authoritative sources:
-  (From line, sender signature, or explicit first-person self-statements by the sender in the CURRENT (non-quoted) message body).
-- Allowed Belegt content: name, role/title, employer/department, location if explicitly stated.
-- Forbidden in Belegt: phone numbers, complete postal addresses, URLs, long boilerplate.
-
-Beobachtet section rules (most important for usefulness):
-- "Beobachtet" is for low-risk context learned from the sender's CURRENT (non-quoted) message body and/or the email subject only.
-- Beobachtet bullets MUST be one level more general than the specific case details.
-  Goal: stable topic/process labels about what the sender is dealing with, not a retelling of the email.
-- Beobachtet bullets MUST be short topic labels (max 12 words) and should read like a category, not like a sentence.
-  They must NOT be verbatim copies of any email sentence.
-- Forbidden in Beobachtet: any new title/role/affiliation claims, seniority, leadership, or anything that could be a high-risk fact.
-
-Anti-copy rule for Beobachtet:
-- The text BEFORE "(Beleg: ...)" must NOT contain more than 5 consecutive words from the evidence quote.
-- The Beobachtet bullet must NOT be identical to the quote.
-- If you cannot write a generalized topic label that differs clearly from the quote, OMIT the bullet.
-
-Wording constraints for Beobachtet:
-- Prefer noun-phrase style labels such as:
-  "Verwaltung von SHK-Verträgen und Fristen", "Ressourcenvergleich (Flächen, Personal)", "Aufbau/Inbetriebnahmephase (Studierendenunterstützung)".
-- Use cautious verbs only if needed: "bearbeitet", "thematisiert", "koordiniert", "klärt".
-- Avoid strong responsibility claims like: "zuständig für", "verantwortlich für", "leitet", "entscheidet", unless the sender explicitly self-states that.
-
-Minimum-value threshold for Beobachtet:
-- Do NOT add a Beobachtet bullet for trivial one-shot requests (ordering supplies, meeting confirmations, short acknowledgments, forwarding without commentary).
-- Only add bullets for topics that indicate the sender's professional domain, expertise area, or recurring process.
-- Ask yourself: "Would this bullet still be useful context in 3 months?" If not, omit it.
-
-Evidence requirement for Beobachtet:
-- Every Beobachtet bullet MUST include a short verbatim quote (5-20 words) copied from the CURRENT message body or the SUBJECT as evidence, in the form:
-  (Beleg: "<quote>")
-- If you cannot provide such a quote, do NOT include that bullet.
-- Do NOT create a Beobachtet bullet that is only "Betreff: ..." or just a rephrasing of the subject without added meaning.
-
-Limits:
-- Max 6 bullets in Belegt and max 6 bullets in Beobachtet.
+Beobachtet rules (most important for usefulness):
+- Beobachtet bullets are for low-risk context learned from the sender's CURRENT (non-quoted) message body and/or the email subject only.
+- Bullets MUST be one level more general than the specific case details.
+  Goal: stable topic/process labels, not a retelling of the email.
+- Bullets MUST be short topic labels (max 12 words), noun-phrase style.
+  Preferred style: "Verwaltung von SHK-Verträgen", "Ressourcenvergleich (Flächen, Personal)".
+- Forbidden: any new title/role/affiliation claims, URLs.
+- Minimum-value threshold: Do NOT add a bullet for trivial one-shot requests (ordering supplies, meeting confirmations, short acknowledgments).
+  Only add bullets for topics indicating the sender's professional domain, expertise area, or recurring process.
+  Ask yourself: "Would this bullet still be useful context in 3 months?" If not, omit it.
+- Max 6 Beobachtet bullets.
 
 Existing profile handling and accumulation:
 - If an EXISTING PROFILE is provided and you learn NOTHING NEW:
-  return the existing Profile text UNCHANGED word for word.
-  You may reformat into the two-section structure ONLY if you keep the original wording verbatim (no paraphrasing, no adding, no removing).
+  return the existing NOTE text UNCHANGED word for word.
 - ACCUMULATION RULE: When an EXISTING PROFILE has Beobachtet bullets, you MUST preserve ALL of them in your output.
   ADD new Beobachtet bullets from the current email (if they meet the quality threshold).
   The Beobachtet section should GROW over time as more emails are processed.
-  Only REMOVE an old Beobachtet bullet if it is clearly factually wrong.
-  Never replace old Beobachtet bullets with new ones -- always keep both (up to the 6-bullet limit).
+  Only REMOVE an old bullet if it is clearly factually wrong.
+  Never replace old bullets with new ones -- always keep both (up to the 6-bullet limit).
 
 LANGUAGE RULE:
-All values MUST be in German (except Language which is a code like "de", "en", "de+en gemischt").
+All values MUST be in German.
 
 OUTPUT FORMAT (exactly this structure, nothing else):
 
 <<BEGIN>>
-Tone: [e.g. "formal, siezt" or "informell, duzt" or "nicht beurteilbar"]
-Language: [e.g. "de", "en", "de+en gemischt" or "nicht bestimmbar"]
-Role: [ONLY if evident from authoritative text, otherwise "nicht bestimmbar"]
-Relationship: [ONLY if determinable, otherwise "nicht bestimmbar"]
-Communication-Style: [description or "nicht bestimmbar" or "nicht direkt an {person} gerichtet"]
-Profile:
-[factual profile text -- or existing profile unchanged if nothing new; if no existing profile and no evidence: "nicht bestimmbar"]
+ORG: [Organisation/Arbeitgeber oder "nicht bestimmbar"]
+TITLE: [Jobtitel oder "nicht bestimmbar"]
+ROLE: [Funktion/Rolle oder "nicht bestimmbar"]
+NICKNAME: [Spitzname falls bekannt, sonst leer]
+ADR: [Adresse falls in Signatur, sonst leer]
+BDAY: [Geburtstag falls erwaehnt, sonst leer]
+CATEGORIES: [Kommaseparierte Tags, z.B. "Kollege,Hochschule" oder leer]
+NOTE:
+Ton: [z.B. "formal, siezt" oder "informell, duzt" oder "nicht beurteilbar"]
+Stil: [Kommunikationsstil oder "nicht bestimmbar" oder "nicht direkt an {person} gerichtet"]
+Beziehung: [Beziehung zum Empfaenger oder "nicht bestimmbar"]
+Beobachtet:
+- [Thema 1]
+- [Thema 2]
 <<END>>

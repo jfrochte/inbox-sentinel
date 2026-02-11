@@ -1,27 +1,30 @@
 """
-contacts.py -- Kontakt-Wissensbasis: pro E-Mail-Adresse ein JSON-Characterblatt.
+contacts.py -- Kontakt-Wissensbasis: pro E-Mail-Adresse eine vCard 3.0 Datei.
 
 Abhaengigkeiten innerhalb des Pakets:
   - utils (log, write_secure)
+  - vcard (read_vcard, write_vcard)
 
 Dieses Modul ist ein Blattmodul. Es wird nur von main.py importiert.
-Kontakt-Dateien liegen in contacts/ (ein JSON pro Adresse).
+Kontakt-Dateien liegen in contacts/ (eine .vcf pro Adresse).
 """
 
 # ============================================================
 # Externe Abhaengigkeiten
 # ============================================================
 import copy
-import json
 import os
 import re
+import uuid
+from datetime import datetime, timezone
 
 import requests
 
 # ============================================================
 # Interne Paket-Imports
 # ============================================================
-from email_report.utils import log, write_secure
+from email_report.utils import log
+from email_report.vcard import read_vcard, write_vcard
 
 
 # ============================================================
@@ -29,19 +32,33 @@ from email_report.utils import log, write_secure
 # ============================================================
 _CONTACTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "contacts")
 
-_EMPTY_CONTACT = {
-    "email": "",
-    "name": "",
-    "tone": {"value": "", "updated": ""},
-    "language": {"value": "", "updated": ""},
-    "role_or_title": {"value": "", "updated": ""},
-    "relationship": {"value": "", "updated": ""},
-    "communication_style": {"value": "", "updated": ""},
-    "profile": {"value": "", "updated": ""},
-    "last_contact": "",
-    "contact_count": 0,
-    "notes": "",
-}
+_PRODID = "-//Inbox Sentinel//EN"
+
+# Werte die beim Merge ignoriert werden (LLM-Platzhalter fuer "weiss nicht")
+_SKIP_VALUES = frozenset({
+    "nicht bestimmbar", "nicht beurteilbar", "unbekannt",
+    "keine neuen informationen", "n/a", "-", "\u2014", "",
+})
+
+_DE_STOPWORDS = frozenset({
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
+    "einer", "und", "oder", "fuer", "für", "von", "mit", "zu", "zum", "zur",
+    "in", "im", "am", "an", "auf", "aus", "bei", "nach", "ueber", "über",
+})
+
+_URL_RE = re.compile(r"https?://")
+
+# Regex fuer Telefonnummern in Signaturen
+_TEL_LINE_RE = re.compile(
+    r"(?:Tel\.?|Fon|Phone|Mobil|Fax|Telefon|Handy)\s*[:.]?\s*"
+    r"([\+\d][\d\s/\-().]{6,})",
+    re.IGNORECASE,
+)
+_TEL_INTL_RE = re.compile(r"\+\d[\d\s/\-().]{7,}")
+
+# Regex fuer URLs in Signaturen (keine mailto:, keine Tracking-Pixel)
+_SIG_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
+_TRACKING_URL_RE = re.compile(r"(?i)(?:track|pixel|click|open|beacon|unsubscribe|list-unsubscribe)")
 
 
 # ============================================================
@@ -49,11 +66,11 @@ _EMPTY_CONTACT = {
 # ============================================================
 def _email_to_filename(email_addr: str) -> str:
     """Wandelt eine E-Mail-Adresse in einen Dateinamen um."""
-    return email_addr.strip().lower().replace("@", "_") + ".json"
+    return email_addr.strip().lower().replace("@", "_") + ".vcf"
 
 
 def _clean_display_name(raw: str) -> str:
-    """Extrahiert sauberen Namen aus IMAP-Header-Format wie '"Roters, Kai" <kai.roters@...>'."""
+    """Extrahiert sauberen Namen aus IMAP-Header-Format wie '"Mustermann, Max" <max@...>'."""
     if not raw:
         return ""
     m = re.match(r'"?([^"<]+)"?\s*<', raw)
@@ -68,27 +85,236 @@ def _ensure_contacts_dir() -> str:
     return _CONTACTS_DIR
 
 
+def _split_name(display_name: str) -> dict:
+    """
+    Heuristik: Display-Name in family/given splitten.
+    Erkennt 'Nachname, Vorname' und 'Vorname Nachname'.
+    """
+    name = display_name.strip()
+    if not name:
+        return {}
+    if "," in name:
+        parts = [p.strip() for p in name.split(",", 1)]
+        if len(parts) == 2 and parts[0] and parts[1]:
+            return {"family": parts[0], "given": parts[1],
+                    "additional": "", "prefix": "", "suffix": ""}
+    parts = name.rsplit(None, 1)
+    if len(parts) == 2:
+        return {"family": parts[1], "given": parts[0],
+                "additional": "", "prefix": "", "suffix": ""}
+    return {"family": name, "given": "",
+            "additional": "", "prefix": "", "suffix": ""}
+
+
+def _is_skip_value(val: str) -> bool:
+    """Prueft ob ein Wert ein LLM-Platzhalter ist und ignoriert werden soll."""
+    return (val or "").strip().lower().rstrip(".") in _SKIP_VALUES
+
+
+# Gaengige Telefonnummer-Formate (nach Bereinigung):
+#   +49 234 777 27 121    (international mit Leerzeichen)
+#   +49-234-777-27-121    (international mit Bindestrichen)
+#   +49 (0) 234 777 27121 (international mit Null-Klammer)
+#   0234 777 27 121       (national)
+#   0234/77727121         (national mit Slash)
+# Minimum 7 Ziffern, Maximum 15 (ITU-T E.164).
+_TEL_VALID_RE = re.compile(
+    r"^\+?\d[\d\s/\-()]{5,}$"
+)
+
+
+def _sanitize_tel(raw: str) -> str:
+    """
+    Bereinigt eine Telefonnummer:
+    - Trailing/Leading Muell entfernen (Klammern, Punkte, Kommas, Semikolons)
+    - Unbalancierte Klammern reparieren oder entfernen
+    - Validierung: 7-15 Ziffern, nur erlaubte Zeichen
+    Gibt leeren String zurueck wenn nicht reparierbar.
+    """
+    s = raw.strip()
+    if not s:
+        return ""
+
+    # Trailing Muell abschneiden (alles was nicht Ziffer/Klammer-zu ist)
+    s = re.sub(r'[.,;:\s]+$', '', s)
+    # Trailing offene Klammer (z.B. "...121 (")
+    s = re.sub(r'\s*\(\s*$', '', s)
+    # Leading Muell (alles vor + oder erster Ziffer)
+    s = re.sub(r'^[^+\d]+', '', s)
+
+    # Klammern balancieren: nur "(0)" oder "(0xx)" Muster behalten
+    # Alles andere: Klammern entfernen
+    balanced = []
+    i = 0
+    while i < len(s):
+        if s[i] == '(':
+            close = s.find(')', i)
+            if close > i:
+                inner = s[i+1:close]
+                # Nur behalten wenn Inhalt wie (0) oder (0234) aussieht
+                if re.match(r'^0\d{0,4}$', inner.strip()):
+                    balanced.append(s[i:close+1])
+                    i = close + 1
+                    continue
+                else:
+                    # Klammern entfernen, Inhalt behalten
+                    balanced.append(inner)
+                    i = close + 1
+                    continue
+            else:
+                # Keine schliessende Klammer: weglassen
+                i += 1
+                continue
+        elif s[i] == ')':
+            # Verwaiste schliessende Klammer: weglassen
+            i += 1
+            continue
+        else:
+            balanced.append(s[i])
+            i += 1
+    s = ''.join(balanced).strip()
+
+    # Whitespace normalisieren
+    s = re.sub(r'\s+', ' ', s).strip()
+
+    # Ziffern zaehlen (E.164: min 7, max 15)
+    digits = re.sub(r'\D', '', s)
+    if len(digits) < 7 or len(digits) > 15:
+        return ""
+
+    # Nur erlaubte Zeichen?
+    if not _TEL_VALID_RE.match(s):
+        return ""
+
+    return s
+
+
+_EMAIL_VALID_RE = re.compile(
+    r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$'
+)
+
+
+def _sanitize_email(raw: str) -> str:
+    """
+    Bereinigt und validiert eine E-Mail-Adresse.
+    Gibt leeren String zurueck wenn ungueltig.
+    """
+    s = raw.strip().lower()
+    if not s:
+        return ""
+
+    # Trailing/Leading Muell
+    s = s.strip('<>"\' ')
+
+    if not _EMAIL_VALID_RE.match(s):
+        return ""
+
+    return s
+
+
 # ============================================================
 # Laden / Speichern
 # ============================================================
 def load_contact(email_addr: str) -> dict | None:
-    """Laedt einen Kontakt aus JSON. Gibt None zurueck wenn nicht vorhanden."""
+    """Laedt einen Kontakt aus vCard. Gibt None zurueck wenn nicht vorhanden."""
     path = os.path.join(_CONTACTS_DIR, _email_to_filename(email_addr))
-    if not os.path.isfile(path):
-        return None
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        log.debug("Kontakt-Datei nicht lesbar %s: %s", path, e)
-        return None
+    data = read_vcard(path)
+    if data is None:
+        log.debug("Kein Kontakt fuer %s", email_addr)
+    return data
 
 
 def save_contact(email_addr: str, data: dict) -> None:
-    """Speichert einen Kontakt als JSON (0o600 Permissions)."""
+    """Speichert einen Kontakt als vCard (0o600 Permissions). Setzt REV automatisch."""
     _ensure_contacts_dir()
+    data["REV"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if not data.get("PRODID"):
+        data["PRODID"] = _PRODID
     path = os.path.join(_CONTACTS_DIR, _email_to_filename(email_addr))
-    write_secure(path, json.dumps(data, ensure_ascii=False, indent=2))
+    write_vcard(path, data)
+
+
+# ============================================================
+# Regelbasierte Extraktion aus E-Mail-Headern
+# ============================================================
+def extract_from_headers(email_dict: dict) -> dict:
+    """
+    Extrahiert Kontakt-Infos regelbasiert aus E-Mail-Headern.
+    Gibt ein partielles vCard-dict zurueck (nur befuellte Felder).
+    """
+    result = {}
+
+    # FN aus From-Header
+    from_raw = (email_dict.get("from") or "").strip()
+    fn = _clean_display_name(from_raw)
+    if fn:
+        result["FN"] = fn
+        n = _split_name(fn)
+        if n:
+            result["N"] = n
+
+    # EMAIL aus from_addr (mit Validierung)
+    email_addr = _sanitize_email((email_dict.get("from_addr") or ""))
+    if email_addr:
+        result["EMAIL"] = email_addr
+
+    # TZ aus Date-Header (Timezone-Offset extrahieren)
+    date_str = (email_dict.get("date") or "").strip()
+    if date_str:
+        tz_match = re.search(r'([+-]\d{2}:?\d{2})\s*$', date_str)
+        if tz_match:
+            tz = tz_match.group(1)
+            if len(tz) == 5 and ':' not in tz:
+                tz = tz[:3] + ':' + tz[3:]
+            result["TZ"] = tz
+
+    return result
+
+
+# ============================================================
+# Regelbasierte Extraktion aus Signatur
+# ============================================================
+def extract_from_signature(body: str) -> dict:
+    """
+    Extrahiert TEL und URL aus dem Signaturbereich (letzte ~15 Zeilen).
+    Gibt ein partielles vCard-dict zurueck.
+    """
+    result = {}
+    if not body:
+        return result
+
+    lines = body.strip().splitlines()
+    sig_lines = lines[-15:] if len(lines) > 15 else lines
+    sig_text = "\n".join(sig_lines)
+
+    # Telefonnummern (mit Sanitizing)
+    tels = []
+    for line in sig_lines:
+        m = _TEL_LINE_RE.search(line)
+        if m:
+            tel = _sanitize_tel(m.group(1))
+            if tel and tel not in tels:
+                tels.append(tel)
+    # Internationale Nummern ohne Label
+    for m in _TEL_INTL_RE.finditer(sig_text):
+        tel = _sanitize_tel(m.group(0))
+        if tel and tel not in tels:
+            tels.append(tel)
+    if tels:
+        result["TEL"] = tels
+
+    # URLs (keine mailto:, keine Tracking)
+    urls = []
+    for m in _SIG_URL_RE.finditer(sig_text):
+        url = m.group(0).rstrip('.,;)>')
+        if _TRACKING_URL_RE.search(url):
+            continue
+        if url not in urls:
+            urls.append(url)
+    if urls:
+        result["URL"] = urls[0]  # Nur die erste sinnvolle URL
+
+    return result
 
 
 # ============================================================
@@ -96,57 +322,43 @@ def save_contact(email_addr: str, data: dict) -> None:
 # ============================================================
 def format_contact_for_prompt(contact_data: dict | None) -> str:
     """
-    Formatiert ein Kontakt-Characterblatt als Prompt-Fragment.
+    Formatiert ein vCard-Kontakt als Prompt-Fragment.
     Gibt leeren String zurueck wenn None oder keine nuetzlichen Daten.
     """
     if not contact_data:
         return ""
 
-    name = (contact_data.get("name") or "").strip()
-    email = (contact_data.get("email") or "").strip()
-    if not name and not email:
+    fn = (contact_data.get("FN") or "").strip()
+    email = (contact_data.get("EMAIL") or "").strip()
+    if not fn and not email:
         return ""
 
     lines = ["--- SENDER CONTEXT ---"]
 
-    ident = f"Known sender: {name}" if name else "Known sender"
+    ident = f"Known sender: {fn}" if fn else "Known sender"
     if email:
         ident += f" ({email})"
     lines.append(ident)
 
-    # Felder mit updated-Datum
+    # vCard-Felder direkt mappen
     field_map = [
-        ("role_or_title", "Role/Title"),
-        ("relationship", "Relationship"),
-        ("tone", "Communication tone"),
-        ("communication_style", "Communication style"),
-        ("language", "Preferred language"),
+        ("ORG", "Organization"),
+        ("TITLE", "Title"),
+        ("ROLE", "Role"),
+        ("CATEGORIES", "Categories"),
     ]
     for key, label in field_map:
-        field = contact_data.get(key)
-        if isinstance(field, dict):
-            val = (field.get("value") or "").strip()
-            updated = (field.get("updated") or "").strip()
-            if val:
-                entry = f"{label}: {val}"
-                if updated:
-                    entry += f" (as of {updated})"
-                lines.append(entry)
+        val = (contact_data.get(key) or "").strip()
+        if val and not _is_skip_value(val):
+            lines.append(f"{label}: {val}")
 
-    # Profile
-    profile_field = contact_data.get("profile")
-    if isinstance(profile_field, dict):
-        profile_val = (profile_field.get("value") or "").strip()
-        if profile_val:
-            lines.append(f"Profile: {profile_val}")
-
-    count = contact_data.get("contact_count", 0)
-    if count:
-        lines.append(f"Previous emails processed: {count}")
-
-    notes = (contact_data.get("notes") or "").strip()
-    if notes:
-        lines.append(f"User notes: {notes}")
+    # NOTE: nur LLM-Sektion (vor ---\nUser:) als Kontext
+    note = (contact_data.get("NOTE") or "").strip()
+    if note:
+        user_sep = note.find("---\nUser:")
+        llm_note = note[:user_sep].strip() if user_sep >= 0 else note.strip()
+        if llm_note:
+            lines.append(f"Profile notes:\n{llm_note}")
 
     lines.append("--- END SENDER CONTEXT ---")
 
@@ -158,153 +370,8 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
 
 
 # ============================================================
-# Profil: Struktur-Sanitizing + Beleg-Strip
+# NOTE Post-Processing + Bullet-Akkumulation
 # ============================================================
-_PROFILE_ALLOWED_HEADERS_RE = re.compile(r"(?im)^\s*(Belegt|Beobachtet)\s*:\s*$")
-_PROFILE_ALLOWED_BULLET_RE = re.compile(r"^\s*-\s+")
-_BELEG_BULLET_RE = re.compile(
-    r'^\s*-\s*(.*?)\s*\(Beleg:\s*["“](.+?)["”]\s*\)\s*$',
-    flags=re.IGNORECASE,
-)
-
-
-def _sanitize_profile_structured(text: str) -> str:
-    """
-    Laesst nur diese Grundstruktur durch:
-      Belegt:
-      - ...
-      Beobachtet:
-      - ...
-    Alles andere (Paragraphen, Signatur-Dumps, etc.) wird verworfen.
-    """
-    txt = (text or "").strip()
-    if not txt:
-        return ""
-
-    out: list[str] = []
-    in_section = False
-    saw_any_bullet = False
-
-    for raw in txt.splitlines():
-        line = raw.rstrip()
-        stripped = line.strip()
-
-        if _PROFILE_ALLOWED_HEADERS_RE.match(stripped):
-            # Header normalisieren
-            if stripped.lower().startswith("belegt"):
-                out.append("Belegt:")
-            else:
-                out.append("Beobachtet:")
-            in_section = True
-            continue
-
-        if not in_section:
-            continue
-
-        if not stripped:
-            continue
-
-        if _PROFILE_ALLOWED_BULLET_RE.match(stripped):
-            out.append(stripped)
-            saw_any_bullet = True
-            continue
-
-        # alles andere verwerfen
-        continue
-
-    cleaned = "\n".join(out).strip()
-    if not cleaned or not saw_any_bullet:
-        return ""
-
-    return cleaned
-
-
-def _norm_ws(s: str) -> str:
-    return re.sub(r"\s+", " ", (s or "")).strip()
-
-
-def strip_belege_from_profile(profile_text: str, evidence_text: str | None = None) -> str:
-    """
-    Entfernt '(Beleg: "...")' aus Beobachtet-Bullets.
-    Optional: Wenn evidence_text gesetzt ist, werden Bullets verworfen,
-    deren Beleg-Zitat nicht im evidence_text vorkommt (Anti-Halluzination).
-    """
-    if not profile_text:
-        return ""
-
-    ev = _norm_ws(evidence_text).lower() if evidence_text else None
-
-    out_lines: list[str] = []
-    for line in profile_text.splitlines():
-        s = line.rstrip()
-
-        m = _BELEG_BULLET_RE.match(s)
-        if m:
-            bullet_text = m.group(1).strip()
-            quote = _norm_ws(m.group(2)).lower()
-
-            # Optional harte Validierung gegen Halluzination:
-            if ev is not None and quote and quote not in ev:
-                continue
-
-            out_lines.append(f"- {bullet_text}")
-            continue
-
-        out_lines.append(s)
-
-    return "\n".join([ln for ln in out_lines if ln.strip() != ""]).strip()
-
-
-# ============================================================
-# Profil: Bullet-Filter + Akkumulation
-# ============================================================
-_PLZ_RE = re.compile(r"\b\d{5}\b")
-_ROOM_RE = re.compile(r"(?i)\braum\b")
-_URL_RE = re.compile(r"https?://")
-
-_DE_STOPWORDS = frozenset({
-    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
-    "einer", "und", "oder", "fuer", "für", "von", "mit", "zu", "zum", "zur",
-    "in", "im", "am", "an", "auf", "aus", "bei", "nach", "ueber", "über",
-})
-
-
-def _filter_belegt_bullet(text: str) -> bool:
-    """True wenn Belegt-Bullet behalten werden soll (kein Adress-/Raum-/URL-Dump)."""
-    if _PLZ_RE.search(text):
-        return False
-    if _ROOM_RE.search(text):
-        return False
-    if _URL_RE.search(text):
-        return False
-    return True
-
-
-def _filter_beobachtet_bullet(text: str) -> bool:
-    """True wenn Beobachtet-Bullet Mindestqualitaet hat (>=3 Woerter, keine URL)."""
-    words = text.split()
-    if len(words) < 3:
-        return False
-    if _URL_RE.search(text):
-        return False
-    return True
-
-
-def _extract_section_bullets(profile_text: str, section: str) -> list[str]:
-    """Extrahiert Bullets aus einer bestimmten Sektion (belegt/beobachtet)."""
-    in_section = False
-    bullets: list[str] = []
-    target = section.lower()
-    for line in (profile_text or "").splitlines():
-        s = line.strip()
-        if _PROFILE_ALLOWED_HEADERS_RE.match(s):
-            in_section = s.lower().startswith(target)
-            continue
-        if in_section and s.startswith("- "):
-            bullets.append(s[2:].strip())
-    return bullets
-
-
 def _content_words(text: str) -> set[str]:
     """Gibt Content-Woerter zurueck (ohne Stoppwoerter und Satzzeichen)."""
     raw = re.sub(r"[^\w\s]", " ", text.lower()).split()
@@ -321,100 +388,174 @@ def _bullets_similar(a: str, b: str, threshold: float = 0.6) -> bool:
     return overlap / min(len(wa), len(wb)) >= threshold
 
 
-def _rebuild_profile(belegt: list[str], beobachtet: list[str]) -> str:
-    """Baut Profil-Text aus Bullet-Listen zusammen."""
-    parts: list[str] = []
-    if belegt:
-        parts.append("Belegt:")
-        parts.extend(f"- {b}" for b in belegt)
-    if beobachtet:
-        parts.append("Beobachtet:")
-        parts.extend(f"- {b}" for b in beobachtet)
-    return "\n".join(parts)
+def _filter_beobachtet_bullet(text: str) -> bool:
+    """True wenn Beobachtet-Bullet Mindestqualitaet hat (>=3 Woerter, keine URL)."""
+    words = text.split()
+    if len(words) < 3:
+        return False
+    if _URL_RE.search(text):
+        return False
+    return True
 
 
-def _postprocess_profile(new_profile: str, old_profile: str | None,
-                         evidence_text: str | None = None) -> str:
+def _extract_beobachtet_bullets(note_text: str) -> list[str]:
+    """Extrahiert Beobachtet-Bullets aus NOTE-Text."""
+    in_beobachtet = False
+    bullets: list[str] = []
+    for line in (note_text or "").splitlines():
+        s = line.strip()
+        if re.match(r"(?i)^beobachtet\s*:", s):
+            in_beobachtet = True
+            continue
+        if s.startswith("---"):
+            break
+        if in_beobachtet and s.startswith("- "):
+            bullets.append(s[2:].strip())
+        elif in_beobachtet and s and not s.startswith("-"):
+            # Nicht-Bullet-Zeile: Sektion beenden
+            in_beobachtet = False
+    return bullets
+
+
+def _postprocess_note(new_note: str, old_note: str | None) -> str:
     """
-    Vollstaendige Post-Processing-Pipeline fuer Profil-Text:
-    1. Struktur-Sanitizing (nur Belegt/Beobachtet)
-    2. Beleg-Zitate strippen (+ Validierung gegen evidence_text)
-    3. Belegt-Bullets filtern (Adressen, Raeume, URLs)
-    4. Beobachtet-Bullets filtern (Mindestqualitaet)
-    5. Alte Beobachtet-Bullets akkumulieren
-    6. Profil neu zusammenbauen
+    Post-Processing fuer NOTE-Feld:
+    - Beobachtet-Bullets akkumulieren (Dedup via word-overlap 0.6)
+    - Max 6 Beobachtet-Bullets
+    - User-Sektion (nach ---\\nUser:) bewahren
     """
-    # 1. Struktur-Sanitizing
-    sanitized = _sanitize_profile_structured(new_profile)
-    if not sanitized:
-        return old_profile or ""
+    # User-Sektion aus altem NOTE bewahren
+    user_section = ""
+    if old_note:
+        user_idx = old_note.find("---\nUser:")
+        if user_idx >= 0:
+            user_section = old_note[user_idx:]
 
-    # 2. Belege strippen
-    stripped = strip_belege_from_profile(sanitized, evidence_text=evidence_text)
-    if not stripped:
-        return old_profile or ""
+    new_text = (new_note or "").strip()
+    if not new_text:
+        if old_note:
+            return old_note
+        return ""
 
-    # 3. Belegt filtern
-    belegt = _extract_section_bullets(stripped, "belegt")
-    belegt = [b for b in belegt if _filter_belegt_bullet(b)]
+    # Neue Beobachtet-Bullets extrahieren und filtern
+    new_bullets = _extract_beobachtet_bullets(new_text)
+    new_bullets = [b for b in new_bullets if _filter_beobachtet_bullet(b)]
 
-    # 4. Beobachtet filtern
-    beobachtet = _extract_section_bullets(stripped, "beobachtet")
-    beobachtet = [b for b in beobachtet if _filter_beobachtet_bullet(b)]
+    # Alte Beobachtet-Bullets akkumulieren
+    if old_note:
+        old_llm = old_note
+        user_idx = old_note.find("---\nUser:")
+        if user_idx >= 0:
+            old_llm = old_note[:user_idx]
+        old_bullets = _extract_beobachtet_bullets(old_llm)
+        old_bullets = [b for b in old_bullets if _filter_beobachtet_bullet(b)]
+        for ob in old_bullets:
+            if not any(_bullets_similar(ob, nb) for nb in new_bullets):
+                new_bullets.append(ob)
+    new_bullets = new_bullets[:6]
 
-    # 5. Alte Beobachtet-Bullets akkumulieren
-    if old_profile:
-        old_beobachtet = _extract_section_bullets(old_profile, "beobachtet")
-        old_beobachtet = [b for b in old_beobachtet if _filter_beobachtet_bullet(b)]
-        for ob in old_beobachtet:
-            if not any(_bullets_similar(ob, nb) for nb in beobachtet):
-                beobachtet.append(ob)
-    beobachtet = beobachtet[:6]
+    # NOTE neu zusammenbauen: Metadaten-Zeilen + Beobachtet + User-Sektion
+    out_lines: list[str] = []
 
-    # 6. Zusammenbauen
-    rebuilt = _rebuild_profile(belegt, beobachtet)
-    return rebuilt or (old_profile or "")
+    # Metadaten-Zeilen (Ton, Stil, Beziehung etc. — alles vor "Beobachtet:")
+    for line in new_text.splitlines():
+        s = line.strip()
+        if re.match(r"(?i)^beobachtet\s*:", s):
+            break
+        if s.startswith("---"):
+            break
+        if s:
+            out_lines.append(s)
+
+    if new_bullets:
+        out_lines.append("Beobachtet:")
+        out_lines.extend(f"- {b}" for b in new_bullets)
+
+    if user_section:
+        out_lines.append(user_section)
+
+    result = "\n".join(out_lines).strip()
+    return result or (old_note or "")
 
 
 # ============================================================
 # Kontakt-Merge
 # ============================================================
-def merge_contact_update(existing: dict | None, llm_extracted: dict,
-                         email_addr: str, display_name: str, email_date: str) -> dict:
+_EMPTY_VCARD: dict = {
+    "FN": "", "N": {}, "NICKNAME": "", "EMAIL": "",
+    "TEL": [], "ADR": "", "ORG": "", "TITLE": "", "ROLE": "",
+    "URL": "", "NOTE": "", "BDAY": "", "UID": "", "REV": "",
+    "PRODID": _PRODID, "CATEGORIES": "", "TZ": "", "GEO": "",
+    "SORT-STRING": "",
+}
+
+
+def merge_contact(existing: dict | None, header_info: dict,
+                  sig_info: dict, llm_info: dict, email_date: str) -> dict:
     """
-    Merged LLM-extrahierte Infos in einen bestehenden (oder neuen) Kontakt.
-    KRITISCH: notes wird NIE automatisch ueberschrieben.
+    Merged regelbasierte + LLM-extrahierte Infos in einen bestehenden Kontakt.
+    Prioritaet: header_info > sig_info > llm_info (fuer ueberlappende Felder).
+    KRITISCH: User-Sektion in NOTE wird NIE ueberschrieben.
     """
     if existing:
         contact = copy.deepcopy(existing)
     else:
-        contact = copy.deepcopy(_EMPTY_CONTACT)
+        contact = copy.deepcopy(_EMPTY_VCARD)
 
-    # Basis-Felder
-    contact["email"] = email_addr
-    if display_name:
-        clean_name = _clean_display_name(display_name)
-        if clean_name:
-            contact["name"] = clean_name
+    # UID beibehalten oder neu generieren
+    if not contact.get("UID"):
+        contact["UID"] = str(uuid.uuid4())
 
-    # Felder mit value/updated
-    dated_fields = ["tone", "language", "role_or_title", "relationship",
-                    "communication_style", "profile"]
-    for key in dated_fields:
-        new_val = (llm_extracted.get(key) or "").strip()
-        if new_val and new_val.lower().rstrip(".") not in _SKIP_VALUES:
-            if not isinstance(contact.get(key), dict):
-                contact[key] = {"value": "", "updated": ""}
-            contact[key]["value"] = new_val
-            contact[key]["updated"] = email_date
+    # Felder mergen: LLM zuerst (niedrigste Prio), dann sig, dann header (hoechste)
+    # Einfache String-Felder
+    simple_fields = ["FN", "ORG", "TITLE", "ROLE", "NICKNAME",
+                     "ADR", "URL", "BDAY", "CATEGORIES", "TZ", "GEO"]
+    for source in [llm_info, sig_info, header_info]:
+        for key in simple_fields:
+            val = (source.get(key) or "").strip()
+            if val and not _is_skip_value(val):
+                contact[key] = val
 
-    # Zaehler und Datum
-    contact["contact_count"] = (contact.get("contact_count") or 0) + 1
-    if email_date:
-        contact["last_contact"] = email_date
+    # EMAIL: separat mit Validierung
+    for source in [llm_info, sig_info, header_info]:
+        raw_email = (source.get("EMAIL") or "").strip()
+        if raw_email:
+            clean = _sanitize_email(raw_email)
+            if clean:
+                contact["EMAIL"] = clean
 
-    # KRITISCH: notes NIE ueberschreiben
-    # (bleibt wie im existing oder leer bei neuem Kontakt)
+    # N-Feld (strukturiert)
+    for source in [llm_info, sig_info, header_info]:
+        n = source.get("N")
+        if n and isinstance(n, dict) and (n.get("family") or n.get("given")):
+            contact["N"] = n
+
+    # TEL: Merge (Listen vereinigen, alle sanitizen)
+    existing_tels = contact.get("TEL") or []
+    if isinstance(existing_tels, str):
+        existing_tels = [existing_tels] if existing_tels else []
+    # Bestehende TELs re-sanitizen (alte unsaubere Eintraege bereinigen)
+    existing_tels = [t for t in (_sanitize_tel(t) for t in existing_tels) if t]
+    for source in [sig_info, header_info]:
+        new_tels = source.get("TEL") or []
+        if isinstance(new_tels, str):
+            new_tels = [new_tels]
+        for t in new_tels:
+            clean = _sanitize_tel(t)
+            if clean and clean not in existing_tels:
+                existing_tels.append(clean)
+    contact["TEL"] = existing_tels
+
+    # NOTE: LLM-Ergebnis mit Akkumulation + User-Sektion bewahren
+    new_note = (llm_info.get("NOTE") or "").strip()
+    if new_note and not _is_skip_value(new_note):
+        old_note = (contact.get("NOTE") or "").strip() or None
+        contact["NOTE"] = _postprocess_note(new_note, old_note)
+
+    # SORT-STRING aus N.family ableiten
+    n = contact.get("N")
+    if isinstance(n, dict) and n.get("family"):
+        contact["SORT-STRING"] = n["family"]
 
     return contact
 
@@ -427,29 +568,24 @@ _END_RE = re.compile(r"<<\s*END\s*>>", re.IGNORECASE)
 
 # Label-Mapping: Regex -> dict-Key (einzeilige Felder)
 _CONTACT_LABELS = [
-    ("tone", re.compile(r"(?i)^tone\s*[:=\-]\s*")),
-    ("language", re.compile(r"(?i)^language\s*[:=\-]\s*")),
-    ("role_or_title", re.compile(r"(?i)^role(?:[/\s\-]*title)?\s*[:=\-]\s*")),
-    ("relationship", re.compile(r"(?i)^relationship\s*[:=\-]\s*")),
-    ("communication_style", re.compile(r"(?i)^communication[\s\-]?style\s*[:=\-]\s*")),
+    ("ORG", re.compile(r"(?i)^ORG\s*[:=\-]\s*")),
+    ("TITLE", re.compile(r"(?i)^TITLE\s*[:=\-]\s*")),
+    ("ROLE", re.compile(r"(?i)^ROLE\s*[:=\-]\s*")),
+    ("NICKNAME", re.compile(r"(?i)^NICKNAME\s*[:=\-]\s*")),
+    ("ADR", re.compile(r"(?i)^ADR\s*[:=\-]\s*")),
+    ("BDAY", re.compile(r"(?i)^BDAY\s*[:=\-]\s*")),
+    ("CATEGORIES", re.compile(r"(?i)^CATEGORIES\s*[:=\-]\s*")),
 ]
 
-# Profile ist ein mehrzeiliges Feld (letztes vor <<END>>)
-_PROFILE_RE = re.compile(r"(?i)^profile\s*[:=\-]\s*")
-
-# Werte die beim Merge ignoriert werden (LLM-Platzhalter fuer "weiss nicht")
-_SKIP_VALUES = frozenset({
-    "nicht bestimmbar", "nicht beurteilbar", "unbekannt",
-    "keine neuen informationen", "n/a", "-", "\u2014",
-})
+# NOTE ist ein mehrzeiliges Feld (letztes vor <<END>>)
+_NOTE_RE = re.compile(r"(?i)^NOTE\s*[:=\-]\s*")
 
 
 def _parse_contact_block(text: str) -> dict:
     """
     Parst einen <<BEGIN>>...<<END>> Block in ein dict.
-    Profile ist mehrzeilig: alles nach 'Profile:' bis <<END>>.
+    NOTE ist mehrzeilig: alles nach 'NOTE:' bis <<END>>.
     """
-    # Block zwischen Markern extrahieren (Fallback: ganzer Text)
     begin = _BEGIN_RE.search(text)
     end = _END_RE.search(text)
     if begin and end and end.start() > begin.end():
@@ -458,40 +594,35 @@ def _parse_contact_block(text: str) -> dict:
         text = text[begin.end():]
 
     out = {}
-    profile_lines = []
-    in_profile = False
+    note_lines = []
+    in_note = False
 
     for line in text.splitlines():
         stripped = line.strip()
 
-        # Wenn wir im Profile-Modus sind: pruefen ob ein neues Label kommt
-        if in_profile:
+        if in_note:
             label_match = False
             for _, regex in _CONTACT_LABELS:
                 if regex.match(stripped):
                     label_match = True
                     break
             if label_match or _END_RE.match(stripped):
-                # Profile beenden, diese Zeile als normales Label weiterverarbeiten
-                in_profile = False
+                in_note = False
             else:
-                # Zeile zum Profile hinzufuegen (Leerzeilen erhalten)
-                profile_lines.append(line.rstrip())
+                note_lines.append(line.rstrip())
                 continue
 
         if not stripped:
             continue
 
-        # Profile-Start erkennen
-        m = _PROFILE_RE.match(stripped)
+        m = _NOTE_RE.match(stripped)
         if m:
-            in_profile = True
+            in_note = True
             rest = stripped[m.end():].strip()
             if rest:
-                profile_lines.append(rest)
+                note_lines.append(rest)
             continue
 
-        # Einzeilige Felder
         for key, regex in _CONTACT_LABELS:
             m = regex.match(stripped)
             if m:
@@ -500,10 +631,9 @@ def _parse_contact_block(text: str) -> dict:
                     out[key] = val
                 break
 
-    # Profile zusammenfuegen
-    profile_text = "\n".join(profile_lines).strip()
-    if profile_text:
-        out["profile"] = profile_text
+    note_text = "\n".join(note_lines).strip()
+    if note_text:
+        out["NOTE"] = note_text
 
     return out
 
@@ -545,7 +675,7 @@ def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
                                  existing_contact: dict | None = None) -> dict:
     """
     Extrahiert Kontakt-Infos aus dem Thread per LLM.
-    Gibt ein dict mit Feldern zurueck, bei Fehler leeres dict.
+    Gibt ein dict mit vCard-Feldern zurueck, bei Fehler leeres dict.
     """
     newest = thread[-1]
     sender = (newest.get("from") or "").strip()
@@ -553,27 +683,23 @@ def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
 
     prompt = prompt_base.replace("{person}", person)
 
-    # Bestehendes Profil + alle Felder mitgeben damit LLM bestehende Werte sehen kann
+    # Bestehendes Profil mitgeben damit LLM bestehende Werte sehen kann
     if existing_contact:
         ep_lines = ["--- EXISTING PROFILE ---"]
-        field_labels = [
-            ("tone", "Tone"), ("language", "Language"),
-            ("role_or_title", "Role"), ("relationship", "Relationship"),
-            ("communication_style", "Communication-Style"),
-        ]
-        for key, label in field_labels:
-            fld = existing_contact.get(key)
-            if isinstance(fld, dict):
-                val = (fld.get("value") or "").strip()
-                if val:
-                    ep_lines.append(f"{label}: {val}")
-        pf = existing_contact.get("profile")
-        if isinstance(pf, dict):
-            pval = (pf.get("value") or "").strip()
-            if pval:
-                ep_lines.append(f"Profile:\n{pval}")
+        for key, label in [("ORG", "ORG"), ("TITLE", "TITLE"), ("ROLE", "ROLE"),
+                           ("CATEGORIES", "CATEGORIES")]:
+            val = (existing_contact.get(key) or "").strip()
+            if val and not _is_skip_value(val):
+                ep_lines.append(f"{label}: {val}")
+        note = (existing_contact.get("NOTE") or "").strip()
+        if note:
+            # Nur LLM-Sektion zeigen (nicht User-Sektion)
+            user_idx = note.find("---\nUser:")
+            llm_note = note[:user_idx].strip() if user_idx >= 0 else note
+            if llm_note:
+                ep_lines.append(f"NOTE:\n{llm_note}")
         ep_lines.append("--- END EXISTING PROFILE ---")
-        if len(ep_lines) > 2:  # mehr als nur Rahmen
+        if len(ep_lines) > 2:
             prompt += "\n" + "\n".join(ep_lines) + "\n"
 
     prompt += f"\nThe sender is: {sender}\n\n{email_section}\n"
@@ -603,7 +729,6 @@ def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
 
         data = resp.json()
 
-        # Text extrahieren (gleiche Logik wie drafts.py, inline)
         text = ""
         if isinstance(data, dict):
             text = (data.get("response") or "").strip()
@@ -625,24 +750,7 @@ def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
         if not text:
             return {}
 
-        extracted = _parse_contact_block(text)
-
-        # Profil: Struktur-Sanitizing, Beleg-Strip, Bullet-Filter, Akkumulation
-        prof = extracted.get("profile")
-        if isinstance(prof, str) and prof.strip():
-            old_profile = ""
-            if existing_contact:
-                pf = existing_contact.get("profile")
-                if isinstance(pf, dict):
-                    old_profile = (pf.get("value") or "").strip()
-            result = _postprocess_profile(prof, old_profile or None,
-                                          evidence_text=email_section)
-            if result:
-                extracted["profile"] = result
-            else:
-                extracted.pop("profile", None)
-
-        return extracted
+        return _parse_contact_block(text)
 
     except Exception as e:
         log.debug("Contact-LLM Fehler: %s", e)

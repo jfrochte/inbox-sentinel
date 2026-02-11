@@ -66,7 +66,8 @@ from email_report.smtp_client import send_email_html
 from email_report.drafts import generate_draft_text, build_draft_message, imap_save_drafts
 from email_report.contacts import (
     load_contact, save_contact, format_contact_for_prompt,
-    merge_contact_update, extract_contact_info_via_llm,
+    extract_from_headers, extract_from_signature, merge_contact,
+    extract_contact_info_via_llm,
 )
 
 
@@ -311,16 +312,17 @@ def main():
         if cfg.auto_contacts and sender_addr:
             try:
                 existing_contact = load_contact(sender_addr)
+                header_info = extract_from_headers(newest)
+                sig_info = extract_from_signature(
+                    newest.get("body_original") or newest.get("body") or "")
                 llm_extracted = extract_contact_info_via_llm(
                     cfg.model, thread, cfg.name, cfg.ollama_url,
                     prompt_base=contact_prompt_base,
                     existing_contact=existing_contact)
-                if llm_extracted:
-                    display_name = (newest.get("from") or "").strip()
-                    email_date = (newest.get("date") or "")
-                    updated = merge_contact_update(
-                        existing_contact, llm_extracted, sender_addr, display_name, email_date)
-                    save_contact(sender_addr, updated)
+                email_date = (newest.get("date") or "")
+                updated = merge_contact(
+                    existing_contact, header_info, sig_info, llm_extracted, email_date)
+                save_contact(sender_addr, updated)
             except Exception as e:
                 log.debug("Contact-Update fehlgeschlagen fuer %s: %s", sender_addr, e)
 

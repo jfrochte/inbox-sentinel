@@ -7,7 +7,7 @@ venv/
 .DS_Store
 .ipynb_checkpoints/
 profiles/*.json
-contacts/*.json
+contacts/*.vcf
 
 # Report temp files (may contain email content)
 zusammenfassung_*.txt
