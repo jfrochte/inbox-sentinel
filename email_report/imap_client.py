@@ -177,6 +177,141 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
 
 
 # ============================================================
+# IMAP Abruf fuer Kontakt-Materialsammlung
+# ============================================================
+def imap_fetch_for_contact(
+    username: str, password: str, imap_server: str, imap_port: int,
+    contact_addr: str, user_email: str,
+    folders: list[str],
+    max_chars: int = 6000,
+    max_days: int = 360,
+) -> list[dict]:
+    """
+    Sammelt E-Mails zwischen contact_addr und user_email aus mehreren Ordnern.
+
+    Pro Mail wird die Richtung bestimmt:
+      - 'incoming': contact_addr ist Sender, user_email in To/Cc
+      - 'outgoing': user_email ist Sender, contact_addr in To/Cc
+
+    Sortierung: neueste zuerst. Text-Budget: sobald kumulierter Body
+    >= max_chars erreicht ist, wird abgebrochen.
+
+    Gibt Liste von dicts zurueck (gleiche Struktur wie imap_fetch_emails_for_range
+    plus 'direction').
+    """
+    contact_low = contact_addr.strip().lower()
+    user_low = user_email.strip().lower()
+
+    since_date = (datetime.now() - timedelta(days=max_days)).date()
+    since_str = since_date.strftime("%d-%b-%Y")
+
+    mail = imaplib.IMAP4_SSL(imap_server, imap_port)
+    raw_results = []
+
+    try:
+        mail.login(username, password)
+
+        for folder in folders:
+            if not folder or not folder.strip():
+                continue
+            try:
+                status, _ = mail.select(folder.strip(), readonly=True)
+                if status != "OK":
+                    log.debug("Ordner '%s' nicht selektierbar, uebersprungen.", folder)
+                    continue
+            except Exception:
+                log.debug("Ordner '%s' nicht vorhanden, uebersprungen.", folder)
+                continue
+
+            # Suche: Mails die contact_addr im FROM oder TO haben
+            query = f'(NOT DELETED SINCE {since_str} OR FROM "{contact_low}" TO "{contact_low}")'
+            try:
+                status, data = mail.uid('search', None, query)
+            except Exception:
+                log.debug("IMAP search in '%s' fehlgeschlagen.", folder)
+                continue
+            if status != "OK" or not data or not data[0]:
+                continue
+
+            msg_ids = data[0].split()
+            for uid_bytes in msg_ids:
+                typ, msg_data = mail.uid('fetch', uid_bytes, "(BODY.PEEK[])")
+                if typ != "OK":
+                    continue
+
+                raw_bytes = None
+                for part in msg_data:
+                    if isinstance(part, tuple):
+                        raw_bytes = part[1]
+                        break
+                if not raw_bytes:
+                    continue
+
+                message = email.message_from_bytes(raw_bytes)
+
+                from_header = decode_mime_words(message.get("from"))
+                from_addr = get_email_address_from_header(from_header).lower()
+                to_header = decode_mime_words(message.get("to"))
+                cc_header = decode_mime_words(message.get("cc"))
+
+                to_cc_text = ((to_header or "") + " " + (cc_header or "")).lower()
+
+                # Richtung bestimmen
+                direction = None
+                if from_addr == contact_low and user_low in to_cc_text:
+                    direction = "incoming"
+                elif from_addr == user_low and contact_low in to_cc_text:
+                    direction = "outgoing"
+
+                if not direction:
+                    continue
+
+                subject = decode_mime_words(message.get("subject"))
+
+                date_iso = ""
+                date_raw = message.get("date")
+                if date_raw:
+                    try:
+                        date_iso = parsedate_to_datetime(date_raw).isoformat()
+                    except Exception:
+                        pass
+
+                body = extract_best_body_text(message)
+
+                raw_results.append({
+                    "uid": uid_bytes.decode(),
+                    "subject": subject,
+                    "from": from_header,
+                    "from_addr": from_addr,
+                    "to": to_header,
+                    "cc": cc_header,
+                    "date": date_iso,
+                    "body": body,
+                    "direction": direction,
+                })
+
+    finally:
+        try:
+            mail.logout()
+        except Exception:
+            pass
+
+    # Sortierung: neueste zuerst
+    raw_results.sort(key=lambda e: e.get("date", ""), reverse=True)
+
+    # Text-Budget anwenden
+    result = []
+    total_chars = 0
+    for entry in raw_results:
+        result.append(entry)
+        total_chars += len(entry.get("body") or "")
+        if total_chars >= max_chars:
+            break
+
+    return result
+
+
+# ============================================================
 # IMAP Auto-Sort: Crash-sichere Nachbearbeitung
 # ============================================================
 def _check_keyword_support(mail) -> bool:

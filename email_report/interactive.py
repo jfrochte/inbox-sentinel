@@ -269,9 +269,13 @@ def prompt_all_settings(cfg: Config) -> Config:
     if auto_draft:
         drafts_folder = prompt_with_default("Drafts-Ordner Fallback (wird automatisch erkannt)", cfg.drafts_folder)
 
-    # Auto-Contacts
-    auto_contacts = prompt_bool_with_default(
-        "Auto-Contacts (Kontakte automatisch aus E-Mails lernen)", cfg.auto_contacts)
+    # Auto-Contacts (Lazy)
+    auto_contacts_lazy = prompt_bool_with_default(
+        "Auto-Contacts Lazy (bei neuen Sendern automatisch Card bauen)", cfg.auto_contacts_lazy)
+    sent_folder = cfg.sent_folder
+    if auto_contacts_lazy:
+        sent_folder = prompt_with_default(
+            "Sent-Ordner fuer Kontakt-Material (z.B. 'Sent', 'Gesendet', leer=nur INBOX)", cfg.sent_folder)
 
     # Aktualisierte Config zurueckgeben (Passwort und Debug-Felder bleiben unveraendert)
     cfg.prompt_file = prompt_file
@@ -293,7 +297,8 @@ def prompt_all_settings(cfg: Config) -> Config:
     cfg.auto_sort = auto_sort
     cfg.auto_draft = auto_draft
     cfg.drafts_folder = drafts_folder
-    cfg.auto_contacts = auto_contacts
+    cfg.auto_contacts_lazy = auto_contacts_lazy
+    cfg.sent_folder = sent_folder
 
     return cfg
 
@@ -319,7 +324,9 @@ def print_config_summary(cfg: Config) -> None:
     print(f"  Prompt:     {cfg.prompt_file}")
     print(f"  Auto-Sort:  {cfg.auto_sort}")
     print(f"  Auto-Draft: {cfg.auto_draft}")
-    print(f"  Contacts:   {cfg.auto_contacts}")
+    print(f"  Contacts:   {cfg.auto_contacts_lazy}")
+    if cfg.auto_contacts_lazy and cfg.sent_folder:
+        print(f"  Sent-Ordner:{cfg.sent_folder}")
     print("------------------------------")
 
 
@@ -403,7 +410,10 @@ def prompt_user_settings(cfg: Config) -> Config:
     if cfg.auto_draft:
         cfg.drafts_folder = prompt_with_default("Drafts-Ordner Fallback (wird automatisch erkannt)", cfg.drafts_folder)
 
-    cfg.auto_contacts = prompt_bool_with_default(
-        "Auto-Contacts (Kontakte automatisch aus E-Mails lernen)", cfg.auto_contacts)
+    cfg.auto_contacts_lazy = prompt_bool_with_default(
+        "Auto-Contacts Lazy (bei neuen Sendern automatisch Card bauen)", cfg.auto_contacts_lazy)
+    if cfg.auto_contacts_lazy:
+        cfg.sent_folder = prompt_with_default(
+            "Sent-Ordner fuer Kontakt-Material (z.B. 'Sent', 'Gesendet', leer=nur INBOX)", cfg.sent_folder)
 
     return cfg

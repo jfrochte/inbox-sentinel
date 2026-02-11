@@ -121,8 +121,9 @@ class Config:
     drafts_folder: str = "Drafts"
     signature_file: str = ""  # Pfad zu optionaler Signaturdatei fuer Drafts
 
-    # Auto-Contacts: Kontakte automatisch aus E-Mails lernen
-    auto_contacts: bool = False
+    # Auto-Contacts: bei neuen Sendern lazy Kontakt-Card bauen
+    auto_contacts_lazy: bool = False
+    sent_folder: str = ""  # Zusaetzlicher Ordner fuer Kontakt-Material (z.B. "Sent", "Gesendet")
 
     # Diese Felder werden NICHT in Profilen gespeichert:
     password: str = ""

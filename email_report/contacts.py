@@ -2,11 +2,16 @@
 contacts.py -- Kontakt-Wissensbasis: pro E-Mail-Adresse eine vCard 3.0 Datei.
 
 Abhaengigkeiten innerhalb des Pakets:
-  - utils (log, write_secure)
+  - utils (log)
   - vcard (read_vcard, write_vcard)
 
 Dieses Modul ist ein Blattmodul. Es wird nur von main.py importiert.
 Kontakt-Dateien liegen in contacts/ (eine .vcf pro Adresse).
+
+Hauptfunktionen:
+  - load_contact / save_contact: vCard laden/speichern
+  - format_contact_for_prompt: Kontakt als Prompt-Fragment
+  - build_contact_card: IMAP-Material -> regelbasiert + LLM -> vCard-dict
 """
 
 # ============================================================
@@ -39,14 +44,6 @@ _SKIP_VALUES = frozenset({
     "nicht bestimmbar", "nicht beurteilbar", "unbekannt",
     "keine neuen informationen", "n/a", "-", "\u2014", "",
 })
-
-_DE_STOPWORDS = frozenset({
-    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einen", "einem",
-    "einer", "und", "oder", "fuer", "für", "von", "mit", "zu", "zum", "zur",
-    "in", "im", "am", "an", "auf", "aus", "bei", "nach", "ueber", "über",
-})
-
-_URL_RE = re.compile(r"https?://")
 
 # Regex fuer Telefonnummern in Signaturen
 _TEL_LINE_RE = re.compile(
@@ -370,115 +367,6 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
 
 
 # ============================================================
-# NOTE Post-Processing + Bullet-Akkumulation
-# ============================================================
-def _content_words(text: str) -> set[str]:
-    """Gibt Content-Woerter zurueck (ohne Stoppwoerter und Satzzeichen)."""
-    raw = re.sub(r"[^\w\s]", " ", text.lower()).split()
-    return {w for w in raw if w not in _DE_STOPWORDS and len(w) > 1}
-
-
-def _bullets_similar(a: str, b: str, threshold: float = 0.6) -> bool:
-    """Prueft ob zwei Bullets thematisch aehnlich genug fuer Dedup sind."""
-    wa = _content_words(a)
-    wb = _content_words(b)
-    if not wa or not wb:
-        return False
-    overlap = len(wa & wb)
-    return overlap / min(len(wa), len(wb)) >= threshold
-
-
-def _filter_beobachtet_bullet(text: str) -> bool:
-    """True wenn Beobachtet-Bullet Mindestqualitaet hat (>=3 Woerter, keine URL)."""
-    words = text.split()
-    if len(words) < 3:
-        return False
-    if _URL_RE.search(text):
-        return False
-    return True
-
-
-def _extract_beobachtet_bullets(note_text: str) -> list[str]:
-    """Extrahiert Beobachtet-Bullets aus NOTE-Text."""
-    in_beobachtet = False
-    bullets: list[str] = []
-    for line in (note_text or "").splitlines():
-        s = line.strip()
-        if re.match(r"(?i)^beobachtet\s*:", s):
-            in_beobachtet = True
-            continue
-        if s.startswith("---"):
-            break
-        if in_beobachtet and s.startswith("- "):
-            bullets.append(s[2:].strip())
-        elif in_beobachtet and s and not s.startswith("-"):
-            # Nicht-Bullet-Zeile: Sektion beenden
-            in_beobachtet = False
-    return bullets
-
-
-def _postprocess_note(new_note: str, old_note: str | None) -> str:
-    """
-    Post-Processing fuer NOTE-Feld:
-    - Beobachtet-Bullets akkumulieren (Dedup via word-overlap 0.6)
-    - Max 6 Beobachtet-Bullets
-    - User-Sektion (nach ---\\nUser:) bewahren
-    """
-    # User-Sektion aus altem NOTE bewahren
-    user_section = ""
-    if old_note:
-        user_idx = old_note.find("---\nUser:")
-        if user_idx >= 0:
-            user_section = old_note[user_idx:]
-
-    new_text = (new_note or "").strip()
-    if not new_text:
-        if old_note:
-            return old_note
-        return ""
-
-    # Neue Beobachtet-Bullets extrahieren und filtern
-    new_bullets = _extract_beobachtet_bullets(new_text)
-    new_bullets = [b for b in new_bullets if _filter_beobachtet_bullet(b)]
-
-    # Alte Beobachtet-Bullets akkumulieren
-    if old_note:
-        old_llm = old_note
-        user_idx = old_note.find("---\nUser:")
-        if user_idx >= 0:
-            old_llm = old_note[:user_idx]
-        old_bullets = _extract_beobachtet_bullets(old_llm)
-        old_bullets = [b for b in old_bullets if _filter_beobachtet_bullet(b)]
-        for ob in old_bullets:
-            if not any(_bullets_similar(ob, nb) for nb in new_bullets):
-                new_bullets.append(ob)
-    new_bullets = new_bullets[:6]
-
-    # NOTE neu zusammenbauen: Metadaten-Zeilen + Beobachtet + User-Sektion
-    out_lines: list[str] = []
-
-    # Metadaten-Zeilen (Ton, Stil, Beziehung etc. — alles vor "Beobachtet:")
-    for line in new_text.splitlines():
-        s = line.strip()
-        if re.match(r"(?i)^beobachtet\s*:", s):
-            break
-        if s.startswith("---"):
-            break
-        if s:
-            out_lines.append(s)
-
-    if new_bullets:
-        out_lines.append("Beobachtet:")
-        out_lines.extend(f"- {b}" for b in new_bullets)
-
-    if user_section:
-        out_lines.append(user_section)
-
-    result = "\n".join(out_lines).strip()
-    return result or (old_note or "")
-
-
-# ============================================================
 # Kontakt-Merge
 # ============================================================
 _EMPTY_VCARD: dict = {
@@ -491,11 +379,11 @@ _EMPTY_VCARD: dict = {
 
 
 def merge_contact(existing: dict | None, header_info: dict,
-                  sig_info: dict, llm_info: dict, email_date: str) -> dict:
+                  sig_info: dict, llm_info: dict) -> dict:
     """
     Merged regelbasierte + LLM-extrahierte Infos in einen bestehenden Kontakt.
     Prioritaet: header_info > sig_info > llm_info (fuer ueberlappende Felder).
-    KRITISCH: User-Sektion in NOTE wird NIE ueberschrieben.
+    NOTE: LLM-Sektion wird komplett ersetzt, User-Sektion (---\\nUser:) bleibt erhalten.
     """
     if existing:
         contact = copy.deepcopy(existing)
@@ -546,11 +434,19 @@ def merge_contact(existing: dict | None, header_info: dict,
                 existing_tels.append(clean)
     contact["TEL"] = existing_tels
 
-    # NOTE: LLM-Ergebnis mit Akkumulation + User-Sektion bewahren
+    # NOTE: LLM-Sektion komplett ersetzen, User-Sektion bewahren
     new_note = (llm_info.get("NOTE") or "").strip()
     if new_note and not _is_skip_value(new_note):
-        old_note = (contact.get("NOTE") or "").strip() or None
-        contact["NOTE"] = _postprocess_note(new_note, old_note)
+        user_section = ""
+        old_note = (contact.get("NOTE") or "").strip()
+        if old_note:
+            user_idx = old_note.find("---\nUser:")
+            if user_idx >= 0:
+                user_section = old_note[user_idx:]
+        if user_section:
+            contact["NOTE"] = new_note + "\n" + user_section
+        else:
+            contact["NOTE"] = new_note
 
     # SORT-STRING aus N.family ableiten
     n = contact.get("N")
@@ -561,19 +457,16 @@ def merge_contact(existing: dict | None, header_info: dict,
 
 
 # ============================================================
-# LLM-Extraktion
+# LLM-Extraktion + Contact-Card Builder
 # ============================================================
 _BEGIN_RE = re.compile(r"<<\s*BEGIN\s*>>", re.IGNORECASE)
 _END_RE = re.compile(r"<<\s*END\s*>>", re.IGNORECASE)
 
-# Label-Mapping: Regex -> dict-Key (einzeilige Felder)
+# Einzeilige Felder im Contact-Block
 _CONTACT_LABELS = [
     ("ORG", re.compile(r"(?i)^ORG\s*[:=\-]\s*")),
     ("TITLE", re.compile(r"(?i)^TITLE\s*[:=\-]\s*")),
     ("ROLE", re.compile(r"(?i)^ROLE\s*[:=\-]\s*")),
-    ("NICKNAME", re.compile(r"(?i)^NICKNAME\s*[:=\-]\s*")),
-    ("ADR", re.compile(r"(?i)^ADR\s*[:=\-]\s*")),
-    ("BDAY", re.compile(r"(?i)^BDAY\s*[:=\-]\s*")),
     ("CATEGORIES", re.compile(r"(?i)^CATEGORIES\s*[:=\-]\s*")),
 ]
 
@@ -581,10 +474,32 @@ _CONTACT_LABELS = [
 _NOTE_RE = re.compile(r"(?i)^NOTE\s*[:=\-]\s*")
 
 
+def _extract_response_text(data) -> str:
+    """Extrahiert Response-Text aus Ollama/OpenAI-kompatibler Antwort."""
+    if not isinstance(data, dict):
+        return ""
+    text = (data.get("response") or "").strip()
+    if not text:
+        msg = data.get("message")
+        if isinstance(msg, dict):
+            text = (msg.get("content") or "").strip()
+    if not text:
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices:
+            ch0 = choices[0]
+            if isinstance(ch0, dict):
+                m = ch0.get("message")
+                if isinstance(m, dict):
+                    text = (m.get("content") or "").strip()
+                if not text:
+                    text = (ch0.get("text") or "").strip()
+    return text
+
+
 def _parse_contact_block(text: str) -> dict:
     """
     Parst einen <<BEGIN>>...<<END>> Block in ein dict.
-    NOTE ist mehrzeilig: alles nach 'NOTE:' bis <<END>>.
+    Felder: ORG, TITLE, ROLE, CATEGORIES (einzeilig) + NOTE (mehrzeilig).
     """
     begin = _BEGIN_RE.search(text)
     end = _END_RE.search(text)
@@ -638,26 +553,15 @@ def _parse_contact_block(text: str) -> dict:
     return out
 
 
-def _format_email_section(thread: list[dict]) -> str:
-    """Formatiert Thread-Kontext fuer den Contact-Prompt (max 3 neueste Mails)."""
-    newest = thread[-1]
-    subject = (newest.get("subject") or "").strip()
-
-    recent = thread[-3:]
-    if len(recent) == 1:
-        header = f"Email subject: {subject}"
-        header += f"\nFrom: {(newest.get('from') or '').strip()}"
-        header += f"\nTo: {(newest.get('to') or '').strip()}"
-        if newest.get("cc"):
-            header += f"\nCc: {(newest.get('cc') or '').strip()}"
-        return f"{header}\nEmail body:\n{(newest.get('body') or '')[:3000]}"
-
+def _format_emails_for_contact_prompt(emails: list[dict]) -> str:
+    """
+    Formatiert gesammelte Mails mit [INCOMING]/[OUTGOING] Labels
+    fuer den Contact-Prompt.
+    """
     parts = []
-    for i, e in enumerate(recent, start=1):
-        is_newest = (i == len(recent))
-        label = f"--- Mail {i}/{len(recent)}"
-        label += " [SENDER'S CURRENT MESSAGE] ---" if is_newest else " [EARLIER/QUOTED] ---"
-        parts.append(label)
+    for i, e in enumerate(emails, start=1):
+        direction = (e.get("direction") or "incoming").upper()
+        parts.append(f"--- Mail {i} [{direction}] ---")
         parts.append(f"From: {(e.get('from') or '').strip()}")
         parts.append(f"To: {(e.get('to') or '').strip()}")
         if e.get("cc"):
@@ -670,39 +574,48 @@ def _format_email_section(thread: list[dict]) -> str:
     return "\n".join(parts)
 
 
-def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
-                                 ollama_url: str, prompt_base: str = "",
-                                 existing_contact: dict | None = None) -> dict:
+def build_contact_card(model: str, contact_addr: str, person: str,
+                       ollama_url: str, contact_prompt_base: str,
+                       collected_emails: list[dict],
+                       existing_contact: dict | None = None) -> dict | None:
     """
-    Extrahiert Kontakt-Infos aus dem Thread per LLM.
-    Gibt ein dict mit vCard-Feldern zurueck, bei Fehler leeres dict.
+    Baut eine Kontakt-Card aus gesammeltem IMAP-Material.
+
+    1. Regelbasiert: extract_from_headers + extract_from_signature ueber alle incoming Mails
+    2. LLM-Call: Prompt + formatiertes Material -> NOTE + ORG/TITLE/ROLE/CATEGORIES
+    3. merge_contact() -> fertiges vCard-dict
+
+    Gibt fertiges vCard-dict zurueck oder None bei Fehler.
     """
-    newest = thread[-1]
-    sender = (newest.get("from") or "").strip()
-    email_section = _format_email_section(thread)
+    if not collected_emails:
+        return None
 
-    prompt = prompt_base.replace("{person}", person)
+    # --- Regelbasierte Extraktion ueber alle incoming Mails aggregieren ---
+    best_header = {}
+    best_sig = {}
+    for e in collected_emails:
+        if e.get("direction") != "incoming":
+            continue
+        h = extract_from_headers(e)
+        for k, v in h.items():
+            if v and k not in best_header:
+                best_header[k] = v
+        s = extract_from_signature(e.get("body") or "")
+        for k, v in s.items():
+            if k == "TEL":
+                existing = best_sig.get("TEL") or []
+                for t in (v if isinstance(v, list) else [v]):
+                    if t not in existing:
+                        existing.append(t)
+                best_sig["TEL"] = existing
+            elif v and k not in best_sig:
+                best_sig[k] = v
 
-    # Bestehendes Profil mitgeben damit LLM bestehende Werte sehen kann
-    if existing_contact:
-        ep_lines = ["--- EXISTING PROFILE ---"]
-        for key, label in [("ORG", "ORG"), ("TITLE", "TITLE"), ("ROLE", "ROLE"),
-                           ("CATEGORIES", "CATEGORIES")]:
-            val = (existing_contact.get(key) or "").strip()
-            if val and not _is_skip_value(val):
-                ep_lines.append(f"{label}: {val}")
-        note = (existing_contact.get("NOTE") or "").strip()
-        if note:
-            # Nur LLM-Sektion zeigen (nicht User-Sektion)
-            user_idx = note.find("---\nUser:")
-            llm_note = note[:user_idx].strip() if user_idx >= 0 else note
-            if llm_note:
-                ep_lines.append(f"NOTE:\n{llm_note}")
-        ep_lines.append("--- END EXISTING PROFILE ---")
-        if len(ep_lines) > 2:
-            prompt += "\n" + "\n".join(ep_lines) + "\n"
-
-    prompt += f"\nThe sender is: {sender}\n\n{email_section}\n"
+    # --- LLM-Call ---
+    llm_info = {}
+    email_section = _format_emails_for_contact_prompt(collected_emails)
+    prompt = contact_prompt_base.replace("{person}", person)
+    prompt += f"\nThe contact is: {contact_addr}\n\n{email_section}\n"
 
     payload = {
         "model": model,
@@ -723,35 +636,14 @@ def extract_contact_info_via_llm(model: str, thread: list[dict], person: str,
             headers={"Content-Type": "application/json"},
             timeout=120,
         )
-        if resp.status_code != 200:
+        if resp.status_code == 200:
+            text = _extract_response_text(resp.json())
+            if text:
+                llm_info = _parse_contact_block(text)
+        else:
             log.debug("Contact-LLM HTTP %d", resp.status_code)
-            return {}
-
-        data = resp.json()
-
-        text = ""
-        if isinstance(data, dict):
-            text = (data.get("response") or "").strip()
-            if not text:
-                msg = data.get("message")
-                if isinstance(msg, dict):
-                    text = (msg.get("content") or "").strip()
-            if not text:
-                choices = data.get("choices")
-                if isinstance(choices, list) and choices:
-                    ch0 = choices[0]
-                    if isinstance(ch0, dict):
-                        m = ch0.get("message")
-                        if isinstance(m, dict):
-                            text = (m.get("content") or "").strip()
-                        if not text:
-                            text = (ch0.get("text") or "").strip()
-
-        if not text:
-            return {}
-
-        return _parse_contact_block(text)
-
     except Exception as e:
         log.debug("Contact-LLM Fehler: %s", e)
-        return {}
+
+    # --- Merge ---
+    return merge_contact(existing_contact, best_header, best_sig, llm_info)

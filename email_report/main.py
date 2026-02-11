@@ -29,7 +29,9 @@ Dieser Modul enthaelt die main()-Funktion, die den gesamten Ablauf steuert:
 # ============================================================
 # Externe Abhaengigkeiten
 # ============================================================
+import argparse
 import os
+from collections import Counter
 from datetime import datetime, timedelta
 
 # tqdm ist optional: wenn installiert, gibt es Fortschrittsbalken.
@@ -58,7 +60,7 @@ from email_report.utils import (
     append_secure,
     write_jsonl,
 )
-from email_report.imap_client import imap_fetch_emails_for_range, imap_safe_sort
+from email_report.imap_client import imap_fetch_emails_for_range, imap_fetch_for_contact, imap_safe_sort
 from email_report.llm import _analyze_thread_guaranteed
 from email_report.threading import group_into_threads
 from email_report.report import sort_summaries_by_priority, summaries_to_html, _parse_llm_summary_block, BLOCK_SEPARATOR
@@ -66,9 +68,85 @@ from email_report.smtp_client import send_email_html
 from email_report.drafts import generate_draft_text, build_draft_message, imap_save_drafts
 from email_report.contacts import (
     load_contact, save_contact, format_contact_for_prompt,
-    extract_from_headers, extract_from_signature, merge_contact,
-    extract_contact_info_via_llm,
+    build_contact_card,
 )
+
+
+# ============================================================
+# CLI: Contact-Build Hilfsfunktionen
+# ============================================================
+def _build_single_contact(cfg, addr: str, contact_prompt_base: str) -> bool:
+    """Baut eine einzelne Kontakt-Card per IMAP-Materialsammlung + LLM.
+    Gibt True zurueck wenn erfolgreich."""
+    folders = [cfg.mailbox]
+    if cfg.sent_folder:
+        folders.append(cfg.sent_folder)
+    collected = imap_fetch_for_contact(
+        username=cfg.username, password=cfg.password,
+        imap_server=cfg.imap_server, imap_port=cfg.imap_port,
+        contact_addr=addr, user_email=cfg.from_email,
+        folders=folders,
+    )
+    if not collected:
+        print(f"  Keine Mails gefunden fuer {addr}")
+        return False
+    print(f"  {len(collected)} Mail(s) gesammelt fuer {addr}")
+    existing = load_contact(addr)
+    card = build_contact_card(
+        cfg.model, addr, cfg.name, cfg.ollama_url,
+        contact_prompt_base, collected, existing_contact=existing,
+    )
+    if card:
+        save_contact(addr, card)
+        print(f"  Card gespeichert: {addr}")
+        return True
+    print(f"  Card-Build fehlgeschlagen fuer {addr}")
+    return False
+
+
+def _build_top_contacts(cfg, contact_prompt_base: str) -> None:
+    """Findet Top-10 Sender ohne Card und baut Cards."""
+    print("Sammle Sender-Frequenzen (letzte 90 Tage)...")
+    emails = imap_fetch_emails_for_range(
+        username=cfg.username, password=cfg.password,
+        from_email=cfg.from_email, days_back=90,
+        imap_server=cfg.imap_server, imap_port=cfg.imap_port,
+        mailbox=cfg.mailbox, use_sentdate=cfg.use_sentdate,
+        skip_own_sent=True,
+    )
+    if not emails:
+        print("Keine E-Mails gefunden.")
+        return
+
+    freq = Counter(e.get("from_addr", "").strip().lower() for e in emails)
+    freq.pop("", None)
+    # Eigene Adresse entfernen
+    if cfg.from_email:
+        freq.pop(cfg.from_email.lower(), None)
+
+    # Top-10 ohne bestehende Card
+    candidates = []
+    for addr, count in freq.most_common(30):
+        if load_contact(addr) is None:
+            candidates.append((addr, count))
+        if len(candidates) >= 10:
+            break
+
+    if not candidates:
+        print("Alle Top-Sender haben bereits eine Card.")
+        return
+
+    print(f"{len(candidates)} Sender ohne Card gefunden:")
+    for addr, count in candidates:
+        print(f"  {addr} ({count} Mails)")
+
+    built = 0
+    for addr, count in candidates:
+        print(f"\nBaue Card fuer {addr} ({count} Mails)...")
+        if _build_single_contact(cfg, addr, contact_prompt_base):
+            built += 1
+
+    print(f"\nFertig: {built}/{len(candidates)} Cards erstellt.")
 
 
 # ============================================================
@@ -76,8 +154,34 @@ from email_report.contacts import (
 # ============================================================
 def main():
     """Hauptablauf: siehe Modul-Docstring fuer Details."""
+    # --- CLI-Argumente ---
+    parser = argparse.ArgumentParser(
+        description="Inbox Sentinel – E-Mail-Report und Kontakt-Management",
+        add_help=False,
+    )
+    parser.add_argument("--build-contact", metavar="EMAIL",
+                        help="Kontakt-Card fuer eine einzelne Adresse bauen")
+    parser.add_argument("--build-contacts", action="store_true",
+                        help="Top-10 Sender ohne Card finden und Cards bauen")
+    cli_args, _ = parser.parse_known_args()
+
     # --- Profil laden ---
     cfg, profile_name = prompt_load_profile()
+
+    # CLI-Modus: Contact-Build
+    if cli_args.build_contact or cli_args.build_contacts:
+        if cfg is None:
+            raise SystemExit("Bitte zuerst ein Profil anlegen.")
+        cfg.password = prompt_secret_with_default("Passwort")
+        try:
+            contact_prompt_base = load_prompt_file("contact_prompt.txt")
+        except FileNotFoundError:
+            raise SystemExit("contact_prompt.txt nicht gefunden.")
+        if cli_args.build_contact:
+            _build_single_contact(cfg, cli_args.build_contact, contact_prompt_base)
+        else:
+            _build_top_contacts(cfg, contact_prompt_base)
+        return
 
     edited = False
     if cfg is not None:
@@ -116,14 +220,14 @@ def main():
             log.warning("draft_prompt.txt nicht gefunden - Auto-Draft deaktiviert.")
             cfg.auto_draft = False
 
-    # --- Contact-Prompt laden (wenn auto_contacts aktiv) ---
+    # --- Contact-Prompt laden (wenn auto_contacts_lazy aktiv) ---
     contact_prompt_base = None
-    if cfg.auto_contacts:
+    if cfg.auto_contacts_lazy:
         try:
             contact_prompt_base = load_prompt_file("contact_prompt.txt")
         except FileNotFoundError:
             log.warning("contact_prompt.txt nicht gefunden - Auto-Contacts deaktiviert.")
-            cfg.auto_contacts = False
+            cfg.auto_contacts_lazy = False
 
     # --- Profil speichern (nur wenn etwas geaendert wurde) ---
     if edited:
@@ -198,15 +302,36 @@ def main():
         newest = thread[-1]
         thread_uids = [e.get("uid") for e in thread if e.get("uid")]
 
-        # --- Punkt A: Kontakt laden (vor LLM-Analyse) ---
+        # --- Punkt A: Kontakt laden (vor LLM-Analyse, immer wenn Card existiert) ---
         sender_context = ""
-        sender_addr = ""
-        if cfg.auto_contacts:
-            sender_addr = (newest.get("from_addr") or "").strip().lower()
-            is_self = bool(cfg.from_email and cfg.from_email.lower() == sender_addr)
-            if sender_addr and not is_self:
-                existing_contact = load_contact(sender_addr)
-                sender_context = format_contact_for_prompt(existing_contact)
+        sender_addr = (newest.get("from_addr") or "").strip().lower()
+        is_self = bool(cfg.from_email and cfg.from_email.lower() == sender_addr)
+        if sender_addr and not is_self:
+            existing_contact = load_contact(sender_addr)
+            if existing_contact is None and cfg.auto_contacts_lazy and contact_prompt_base:
+                # Lazy-Build: Card existiert noch nicht, Material sammeln und bauen
+                try:
+                    folders = [cfg.mailbox]
+                    if cfg.sent_folder:
+                        folders.append(cfg.sent_folder)
+                    collected = imap_fetch_for_contact(
+                        username=cfg.username, password=cfg.password,
+                        imap_server=cfg.imap_server, imap_port=cfg.imap_port,
+                        contact_addr=sender_addr, user_email=cfg.from_email,
+                        folders=folders,
+                    )
+                    if collected:
+                        card = build_contact_card(
+                            cfg.model, sender_addr, cfg.name, cfg.ollama_url,
+                            contact_prompt_base, collected,
+                        )
+                        if card:
+                            save_contact(sender_addr, card)
+                            existing_contact = card
+                            log.info("Lazy-Build: Kontakt-Card erstellt fuer %s", sender_addr)
+                except Exception as e:
+                    log.debug("Lazy-Build fehlgeschlagen fuer %s: %s", sender_addr, e)
+            sender_context = format_contact_for_prompt(existing_contact)
 
         dbg = None
         if debug_log:
@@ -307,24 +432,6 @@ def main():
                     draft_stats["failed"] += 1
                     log.warning("Draft-Fehler fuer '%s': %s",
                                 (newest.get("subject") or "?")[:80], e)
-
-        # --- Punkt D: Kontakt per LLM aktualisieren ---
-        if cfg.auto_contacts and sender_addr:
-            try:
-                existing_contact = load_contact(sender_addr)
-                header_info = extract_from_headers(newest)
-                sig_info = extract_from_signature(
-                    newest.get("body_original") or newest.get("body") or "")
-                llm_extracted = extract_contact_info_via_llm(
-                    cfg.model, thread, cfg.name, cfg.ollama_url,
-                    prompt_base=contact_prompt_base,
-                    existing_contact=existing_contact)
-                email_date = (newest.get("date") or "")
-                updated = merge_contact(
-                    existing_contact, header_info, sig_info, llm_extracted, email_date)
-                save_contact(sender_addr, updated)
-            except Exception as e:
-                log.debug("Contact-Update fehlgeschlagen fuer %s: %s", sender_addr, e)
 
         append_secure(summaries_file, final_block)
         append_secure(summaries_file, f"\n\n{BLOCK_SEPARATOR}\n\n")
