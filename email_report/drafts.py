@@ -120,6 +120,19 @@ def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url:
 _REPLY_PREFIX_RE = re.compile(r"^(Re|AW|Antwort|Antw|SV|VS|Ref)\s*:\s*", re.IGNORECASE)
 
 
+def _build_full_quote(newest: dict) -> str:
+    """Baut den Full-Quote-Block aus der neuesten Mail im Thread."""
+    original = (newest.get("body_original") or newest.get("body") or "").strip()
+    if not original:
+        return ""
+
+    sender = (newest.get("from") or "").strip()
+    date = (newest.get("date") or "").strip()
+
+    quoted = "\n".join("> " + line for line in original.splitlines())
+    return f"\nAm {date} schrieb {sender}:\n{quoted}"
+
+
 def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
                         person_name: str):
     """
@@ -135,7 +148,11 @@ def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
     # [Sentinel-Entwurf] Prefix: kennzeichnet LLM-generierte Drafts
     subject = f"[Sentinel-Entwurf] {subject}"
 
-    msg = MIMEText(draft_body, "plain", _charset=_QP_UTF8)
+    # Full-Quote: Original-Mail unter dem LLM-Entwurf
+    full_quote = _build_full_quote(newest)
+    full_body = draft_body + full_quote if full_quote else draft_body
+
+    msg = MIMEText(full_body, "plain", _charset=_QP_UTF8)
     msg["From"] = f"{person_name} <{from_email}>"
     msg["To"] = (newest.get("from") or "").strip()
     msg["Subject"] = subject

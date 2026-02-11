@@ -36,6 +36,7 @@ from email_report.email_parser import (
     decode_mime_words,
     get_email_address_from_header,
     extract_best_body_text,
+    extract_raw_body_text,
 )
 
 
@@ -149,6 +150,7 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
                     pass
 
             body = extract_best_body_text(message)
+            body_original = extract_raw_body_text(message)
 
             emails.append({
                 "uid": uid_bytes.decode(),
@@ -162,6 +164,7 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
                 "references": references,
                 "date": date_iso,
                 "body": body,
+                "body_original": body_original,
             })
 
     finally:

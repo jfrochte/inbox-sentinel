@@ -265,3 +265,56 @@ def extract_best_body_text(message: email.message.Message) -> str:
     # Bei Gleichstand ist Reihenfolge egal, wir nehmen einfach max.
     best = max(candidates, key=lambda x: x[0])
     return best[1].strip()
+
+
+def extract_raw_body_text(message: email.message.Message) -> str:
+    """
+    Extrahiert den vollstaendigen Body-Text einer Mail ohne Split/Score/Quote.
+
+    Gleiche MIME-Walk-Logik wie extract_best_body_text (Attachments skippen),
+    aber der Text wird 1:1 zurueckgegeben. Bei mehreren Kandidaten:
+    text/plain bevorzugt, sonst laengster.
+    """
+    candidates = []  # List[tuple(ctype, text)]
+
+    def _decode_part(part):
+        payload = part.get_payload(decode=True)
+        if payload is None:
+            return None
+        charset = part.get_content_charset() or "utf-8"
+        try:
+            return payload.decode(charset, errors="replace")
+        except LookupError:
+            return payload.decode("utf-8", errors="replace")
+
+    if message.is_multipart():
+        for part in message.walk():
+            if part.is_multipart():
+                continue
+            ctype = part.get_content_type()
+            if part.get_content_disposition() == "attachment" or part.get_filename():
+                continue
+            if ctype not in ("text/plain", "text/html"):
+                continue
+            decoded = _decode_part(part)
+            if decoded:
+                if ctype == "text/html":
+                    decoded = html_to_text(decoded)
+                candidates.append((ctype, decoded))
+    else:
+        ctype = message.get_content_type()
+        if ctype in ("text/plain", "text/html"):
+            decoded = _decode_part(message)
+            if decoded:
+                if ctype == "text/html":
+                    decoded = html_to_text(decoded)
+                candidates.append((ctype, decoded))
+
+    if not candidates:
+        return ""
+
+    # text/plain bevorzugen, sonst laengsten nehmen
+    plain = [t for ct, t in candidates if ct == "text/plain"]
+    if plain:
+        return max(plain, key=len).strip()
+    return max((t for _, t in candidates), key=len).strip()
