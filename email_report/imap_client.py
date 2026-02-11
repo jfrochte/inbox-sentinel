@@ -223,17 +223,22 @@ def imap_fetch_for_contact(
                 log.debug("Ordner '%s' nicht vorhanden, uebersprungen.", folder)
                 continue
 
-            # Suche: Mails die contact_addr im FROM oder TO haben
-            query = f'(NOT DELETED SINCE {since_str} OR FROM "{contact_low}" TO "{contact_low}")'
-            try:
-                status, data = mail.uid('search', None, query)
-            except Exception:
-                log.debug("IMAP search in '%s' fehlgeschlagen.", folder)
-                continue
-            if status != "OK" or not data or not data[0]:
-                continue
-
-            msg_ids = data[0].split()
+            # Zwei getrennte Suchen (OR wird von manchen Servern nicht korrekt unterstuetzt)
+            seen_uids = set()
+            msg_ids = []
+            for field in ("FROM", "TO"):
+                query = f'(NOT DELETED SINCE {since_str} {field} "{contact_low}")'
+                try:
+                    status, data = mail.uid('search', None, query)
+                except Exception:
+                    log.debug("IMAP search %s in '%s' fehlgeschlagen.", field, folder)
+                    continue
+                if status != "OK" or not data or not data[0]:
+                    continue
+                for uid_b in data[0].split():
+                    if uid_b not in seen_uids:
+                        seen_uids.add(uid_b)
+                        msg_ids.append(uid_b)
             for uid_bytes in msg_ids:
                 typ, msg_data = mail.uid('fetch', uid_bytes, "(BODY.PEEK[])")
                 if typ != "OK":
@@ -254,13 +259,13 @@ def imap_fetch_for_contact(
                 to_header = decode_mime_words(message.get("to"))
                 cc_header = decode_mime_words(message.get("cc"))
 
-                to_cc_text = ((to_header or "") + " " + (cc_header or "")).lower()
-
-                # Richtung bestimmen
+                # Richtung bestimmen: nur anhand From-Adresse
+                # (Cross-Check auf To/Cc entfaellt, da Mailbox-Adresse und
+                #  from_email unterschiedlich sein koennen, z.B. bei Weiterleitung)
                 direction = None
-                if from_addr == contact_low and user_low in to_cc_text:
+                if from_addr == contact_low:
                     direction = "incoming"
-                elif from_addr == user_low and contact_low in to_cc_text:
+                elif contact_low in ((to_header or "") + " " + (cc_header or "")).lower():
                     direction = "outgoing"
 
                 if not direction:
