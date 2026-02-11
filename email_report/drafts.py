@@ -15,7 +15,6 @@ Drei Funktionen:
 # Externe Abhaengigkeiten
 # ============================================================
 import imaplib
-import os
 import re
 import email.charset as _charset
 from email.mime.text import MIMEText
