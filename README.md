@@ -111,8 +111,17 @@ email_report/
   contacts.py      -- Auto-contacts: per-sender vCard profiles, LLM extraction
   main.py          -- Orchestration: two-pass pipeline (analysis, then drafts)
   utils.py         -- Logging, file helpers
-  i18n.py          -- Backend i18n (en/de), set_language(), t()
   llm_profiles.py  -- LLM profile loading (extraction vs creative)
+  i18n/            -- Backend i18n (en/de), set_language(), t()
+    en.json
+    de.json
+  prompts/         -- LLM prompt templates
+    prompt.txt         -- Analysis prompt
+    draft_prompt.txt   -- Draft generation prompt
+    contact_prompt.txt -- Contact extraction prompt
+  data/            -- Static data files
+    llm_profiles.json  -- LLM temperature/context profiles
+    organizations.json -- Email provider presets (Gmail, Outlook, etc.)
 
 gui/                   -- Browser GUI (FastAPI backend)
   server.py            -- FastAPI app, CORS, static mount
@@ -128,12 +137,6 @@ gui/                   -- Browser GUI (FastAPI backend)
       i18n/            -- GUI i18n strings (en.json, de.json)
       api/             -- API client + TypeScript types
 
-prompt.txt             -- LLM analysis prompt
-draft_prompt.txt       -- LLM draft generation prompt
-contact_prompt.txt     -- LLM contact extraction prompt
-organizations.json     -- Email provider presets (Gmail, Outlook, etc.)
-llm_profiles.json      -- LLM temperature/context profiles
-i18n/                  -- Backend i18n strings (en.json, de.json)
 profiles/              -- Saved JSON profiles (excluded from git)
 contacts/              -- Per-sender vCard files (excluded from git)
 ```
@@ -292,8 +295,17 @@ email_report/
   contacts.py      -- Auto-Contacts: Sender-vCards, LLM-Extraktion
   main.py          -- Orchestrierung: Zwei-Pass-Pipeline (Analyse, dann Drafts)
   utils.py         -- Logging, File-Helper
-  i18n.py          -- Backend i18n (en/de), set_language(), t()
   llm_profiles.py  -- LLM-Profil-Laden (Extraction vs Creative)
+  i18n/            -- Backend i18n (en/de), set_language(), t()
+    en.json
+    de.json
+  prompts/         -- LLM-Prompt-Vorlagen
+    prompt.txt         -- Analyseprompt
+    draft_prompt.txt   -- Draft-Generierungsprompt
+    contact_prompt.txt -- Kontaktextraktionsprompt
+  data/            -- Statische Datendateien
+    llm_profiles.json  -- LLM-Temperatur-/Kontext-Profile
+    organizations.json -- E-Mail-Provider-Presets (Gmail, Outlook, etc.)
 
 gui/                   -- Browser-GUI (FastAPI Backend)
   server.py            -- FastAPI App, CORS, Static Mount
@@ -309,12 +321,6 @@ gui/                   -- Browser-GUI (FastAPI Backend)
       i18n/            -- GUI i18n Strings (en.json, de.json)
       api/             -- API Client + TypeScript Types
 
-prompt.txt             -- LLM-Analyseprompt
-draft_prompt.txt       -- LLM-Draft-Generierungsprompt
-contact_prompt.txt     -- LLM-Kontaktextraktionsprompt
-organizations.json     -- E-Mail-Provider-Presets (Gmail, Outlook, etc.)
-llm_profiles.json      -- LLM-Temperatur-/Kontext-Profile
-i18n/                  -- Backend i18n Strings (en.json, de.json)
 profiles/              -- Gespeicherte JSON-Profile (nicht in git)
 contacts/              -- Sender-vCards (nicht in git)
 ```

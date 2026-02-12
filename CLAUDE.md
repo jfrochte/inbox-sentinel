@@ -17,7 +17,7 @@
 - `drafts.py` imports from `threading` + `utils` + `llm_profiles` + `llm` (for `_session`)
 - `vcard.py` is a leaf module (`utils` only)
 - `contacts.py` imports from `utils` + `vcard` + `llm_profiles` + `llm` (for `_session`)
-- `i18n.py` is a leaf module (no package deps, only `json` + `os`)
+- `i18n/` is a leaf package (no internal deps, only `json` + `os`)
 - `llm_profiles.py` is a leaf module (no package deps, only `json` + `os`)
 - `gui/` package: `server.py` mounts routes, `service.py` adapts business-logic modules, `progress.py` is thread-safe job store
 
@@ -57,7 +57,7 @@
 - `python -m email_report` or `run_gui.sh` starts the server at `http://127.0.0.1:8741`
 - Jobs run in background threads with progress polling (1s interval)
 - Password: sent with job request, never persisted
-- Frontend i18n: `gui/frontend/src/i18n/{en,de}.json` (separate from backend `i18n/`)
+- Frontend i18n: `gui/frontend/src/i18n/{en,de}.json` (separate from backend `email_report/i18n/`)
 - Run summary stats: total_emails, thread_count, unique_senders, categories, draft_stats, triage_stats
 
 ## Environment

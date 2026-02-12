@@ -76,13 +76,17 @@ def write_secure(path: str, text: str) -> None:
         ensure_mode_0600(path)
 
 
-def load_prompt_file(path: str) -> str:
+_PROMPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+
+
+def load_prompt_file(filename: str) -> str:
     """
-    Loads a prompt from a text file.
+    Loads a prompt from a text file in email_report/prompts/.
     - UTF-8
     - Strips a potential UTF-8 BOM
     - Ensures the prompt ends with a newline
     """
+    path = os.path.join(_PROMPTS_DIR, filename)
     with open(path, "r", encoding="utf-8-sig") as f:
         txt = f.read()
 

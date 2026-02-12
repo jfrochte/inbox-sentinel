@@ -22,7 +22,10 @@ from email_report.i18n import set_language
 # ============================================================
 # Organizations
 # ============================================================
-_ORGS_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "organizations.json")
+_ORGS_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "email_report", "data", "organizations.json",
+)
 
 
 def list_organizations() -> list[dict]:

@@ -1,17 +1,14 @@
 """
-i18n.py -- Internationalization: load translation files, provide t() lookup.
+i18n -- Internationalization: load translation files, provide t() lookup.
 
 Leaf module with no internal package dependencies.
-Translation files live in i18n/ (project root), one JSON per language.
+Translation files live alongside this __init__.py (one JSON per language).
 """
 
 import json
 import os
 
-_I18N_DIR = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "i18n",
-)
+_I18N_DIR = os.path.dirname(os.path.abspath(__file__))
 
 _active_lang = "en"
 _cache: dict[str, dict] = {}

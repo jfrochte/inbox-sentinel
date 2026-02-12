@@ -9,8 +9,7 @@ import json
 import os
 
 _PROFILES_PATH = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "llm_profiles.json",
+    os.path.dirname(os.path.abspath(__file__)), "data", "llm_profiles.json",
 )
 
 _DEFAULT_PROFILES = {
