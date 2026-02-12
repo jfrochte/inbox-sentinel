@@ -3,6 +3,7 @@ interactive.py -- User prompts and profile selection UI.
 
 Dependencies within the package:
   - config (Config, list_profiles, load_profile, save_profile, defaults)
+  - i18n (t for translated strings)
 
 Bundles all interactive inputs the user needs to provide at startup.
 Separates UI logic from actual processing.
@@ -39,6 +40,7 @@ from email_report.config import (
     DEFAULT_MAILBOX,
     USE_SENTDATE_SEARCH,
 )
+from email_report.i18n import t
 
 
 # ============================================================
@@ -59,7 +61,7 @@ def prompt_with_default(label: str, default: str, required: bool = False) -> str
             val = input(f"{label}: ").strip()
             if val or not required:
                 return val
-            print("  Pflichtfeld – bitte einen Wert eingeben.")
+            print(t("interactive.required_field"))
 
 
 def prompt_int_with_default(label: str, default: int) -> int:
@@ -74,7 +76,7 @@ def prompt_int_with_default(label: str, default: int) -> int:
             return default
         if raw.isdigit():
             return int(raw)
-        print("Bitte eine ganze Zahl eingeben (oder Return fuer Default).")
+        print(t("interactive.enter_integer"))
 
 
 def prompt_bool_with_default(label: str, default: bool) -> bool:
@@ -94,7 +96,7 @@ def prompt_bool_with_default(label: str, default: bool) -> bool:
 def prompt_secret_with_default(label: str) -> str:
     env_pw = os.environ.get("DEV_EMAIL_PASSWORD", "").strip()
     if env_pw:
-        print(f"{label}: (aus Environment Variable)")
+        print(t("interactive.password_from_env", label=label))
         return env_pw
     return getpass(f"{label} : ")
 
@@ -136,17 +138,17 @@ def prompt_model_select(default_model: str, ollama_url: str) -> str:
     """Model prompt: tries to list models via /api/tags first. Selection by number or name."""
     models = try_fetch_ollama_models(ollama_url)
     if not models:
-        return prompt_with_default("Ollama Modell", default_model)
+        return prompt_with_default(t("interactive.label_ollama_url").split("(")[0].strip(), default_model)
 
-    print("\nVerfuegbare Ollama Modelle:")
+    print(t("interactive.available_models"))
     default_in_list = default_model in models
     for i, name in enumerate(models, 1):
-        marker = " (default)" if name == default_model else ""
+        marker = t("interactive.model_default_marker") if name == default_model else ""
         print(f"  {i}) {name}{marker}")
     if not default_in_list:
-        print(f"  Hinweis: Default '{default_model}' ist nicht in der Liste, du kannst ihn trotzdem eingeben.")
+        print(t("interactive.model_not_in_list", model=default_model))
 
-    raw = input(f"Ollama Modell (Nummer oder Name) [{default_model}]: ").strip()
+    raw = input(t("interactive.model_prompt", default=default_model)).strip()
     if not raw:
         return default_model
 
@@ -154,7 +156,7 @@ def prompt_model_select(default_model: str, ollama_url: str) -> str:
         idx = int(raw)
         if 1 <= idx <= len(models):
             return models[idx - 1]
-        print("Ungueltige Nummer. Nutze Default.")
+        print(t("interactive.invalid_number"))
         return default_model
 
     return raw
@@ -172,12 +174,12 @@ def prompt_load_profile() -> tuple[Config | None, str]:
     if not profiles:
         return None, ""
 
-    print("\nVerfuegbare Profile:")
+    print(t("interactive.available_profiles"))
     for i, name in enumerate(profiles, 1):
         print(f"  {i}) {name}")
-    print(f"  0) Kein Profil laden (neues Profil erstellen)")
+    print(t("interactive.no_profile_option"))
 
-    raw = input("Profil waehlen (Nummer oder Name) [0]: ").strip()
+    raw = input(t("interactive.select_profile")).strip()
     if not raw or raw == "0":
         return None, ""
 
@@ -186,18 +188,18 @@ def prompt_load_profile() -> tuple[Config | None, str]:
         if 1 <= idx <= len(profiles):
             name = profiles[idx - 1]
             cfg = load_profile(name)
-            print(f"Profil '{name}' geladen.")
+            print(t("interactive.profile_loaded", name=name))
             return cfg, name
-        print("Ungueltige Nummer. Kein Profil geladen.")
+        print(t("interactive.invalid_number_no_profile"))
         return None, ""
 
     # Name entered directly
     if raw in profiles:
         cfg = load_profile(raw)
-        print(f"Profil '{raw}' geladen.")
+        print(t("interactive.profile_loaded", name=raw))
         return cfg, raw
 
-    print(f"Profil '{raw}' nicht gefunden. Kein Profil geladen.")
+    print(t("interactive.profile_not_found", name=raw))
     return None, ""
 
 
@@ -207,19 +209,19 @@ def prompt_save_profile(cfg: Config, default_name: str = "") -> None:
     If default_name is set, it is offered as suggestion.
     """
     if default_name:
-        raw = input(f"\nKonfiguration als Profil speichern? (Name) [{default_name}]: ").strip()
+        raw = input(t("interactive.save_profile_with_default", name=default_name)).strip()
         if not raw:
             raw = default_name
     else:
-        raw = input("\nKonfiguration als Profil speichern? (Name eingeben oder Return zum Ueberspringen): ").strip()
+        raw = input(t("interactive.save_profile_prompt")).strip()
         if not raw:
             return
 
     try:
         path = save_profile(raw, cfg)
-        print(f"Profil '{raw}' gespeichert: {path}")
+        print(t("interactive.profile_saved", name=raw, path=path))
     except ValueError as e:
-        print(f"Fehler: {e}")
+        print(t("interactive.profile_save_error", error=str(e)))
 
 
 def prompt_all_settings(cfg: Config) -> Config:
@@ -227,52 +229,52 @@ def prompt_all_settings(cfg: Config) -> Config:
     Prompts for all settings interactively, using values from cfg as defaults.
     Returns an updated Config (password is NOT prompted here).
     """
-    print("\nKonfiguration (Return nimmt jeweils Default):\n")
+    print(t("interactive.config_header"))
 
-    prompt_file = prompt_with_default("Prompt-Datei", cfg.prompt_file)
+    prompt_file = prompt_with_default(t("interactive.label_prompt_file"), cfg.prompt_file)
 
     # Server and ports
-    imap_server = prompt_with_default("IMAP Server", cfg.imap_server, required=True)
-    imap_port = prompt_int_with_default("IMAP Port", cfg.imap_port)
+    imap_server = prompt_with_default(t("interactive.label_imap_server"), cfg.imap_server, required=True)
+    imap_port = prompt_int_with_default(t("interactive.label_imap_port"), cfg.imap_port)
 
-    smtp_server = prompt_with_default("SMTP Server", cfg.smtp_server, required=True)
-    smtp_port = prompt_int_with_default("SMTP Port", cfg.smtp_port)
-    smtp_ssl = prompt_bool_with_default("SMTP SSL/TLS verwenden", cfg.smtp_ssl)
+    smtp_server = prompt_with_default(t("interactive.label_smtp_server"), cfg.smtp_server, required=True)
+    smtp_port = prompt_int_with_default(t("interactive.label_smtp_port"), cfg.smtp_port)
+    smtp_ssl = prompt_bool_with_default(t("interactive.label_smtp_ssl"), cfg.smtp_ssl)
 
-    mailbox = prompt_with_default("Mailbox/Folder", cfg.mailbox)
+    mailbox = prompt_with_default(t("interactive.label_mailbox"), cfg.mailbox)
 
     # Account / sender
-    username = prompt_with_default("Username", cfg.username, required=True)
-    from_email = prompt_with_default("From E-Mail", cfg.from_email, required=True)
-    recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email, required=True)
-    name = prompt_with_default("Name", cfg.name, required=True)
-    roles = prompt_with_default("Rollen/Zustaendigkeiten (optional, z.B. 'IT-Leitung, Projektmanager')", cfg.roles)
+    username = prompt_with_default(t("interactive.label_username"), cfg.username, required=True)
+    from_email = prompt_with_default(t("interactive.label_from_email"), cfg.from_email, required=True)
+    recipient_email = prompt_with_default(t("interactive.label_recipient_email"), cfg.recipient_email, required=True)
+    name = prompt_with_default(t("interactive.label_name"), cfg.name, required=True)
+    roles = prompt_with_default(t("interactive.label_roles"), cfg.roles)
 
     # Date range
-    days_back = prompt_int_with_default("Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
-    use_sentdate = prompt_bool_with_default("IMAP Suche ueber SENTDATE (Date: Header)", cfg.use_sentdate)
+    days_back = prompt_int_with_default(t("interactive.label_days_back"), cfg.days_back)
+    use_sentdate = prompt_bool_with_default(t("interactive.label_use_sentdate"), cfg.use_sentdate)
+
+    # Language
+    language = prompt_with_default(t("interactive.label_language"), cfg.language)
 
     # Ollama
-    ollama_url = prompt_with_default("Ollama URL", os.environ.get("OLLAMA_URL", cfg.ollama_url))
+    ollama_url = prompt_with_default(t("interactive.label_ollama_url"), os.environ.get("OLLAMA_URL", cfg.ollama_url))
     model = prompt_model_select(cfg.model, ollama_url)
 
     # Auto-Triage
-    auto_triage = prompt_bool_with_default("Auto-Triage (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_triage)
+    auto_triage = prompt_bool_with_default(t("interactive.label_auto_triage"), cfg.auto_triage)
 
     # Auto-Draft
-    auto_draft = prompt_bool_with_default(
-        "Auto-Draft (Antwortentwuerfe fuer ACTIONABLE Mails)", cfg.auto_draft)
+    auto_draft = prompt_bool_with_default(t("interactive.label_auto_draft"), cfg.auto_draft)
     drafts_folder = cfg.drafts_folder
     if auto_draft:
-        drafts_folder = prompt_with_default("Drafts-Ordner Fallback (wird automatisch erkannt)", cfg.drafts_folder)
+        drafts_folder = prompt_with_default(t("interactive.label_drafts_folder"), cfg.drafts_folder)
 
     # Auto-Contacts (Lazy)
-    auto_contacts_lazy = prompt_bool_with_default(
-        "Auto-Contacts Lazy (bei neuen Sendern automatisch Card bauen)", cfg.auto_contacts_lazy)
+    auto_contacts_lazy = prompt_bool_with_default(t("interactive.label_auto_contacts"), cfg.auto_contacts_lazy)
     sent_folder = cfg.sent_folder
     if auto_contacts_lazy:
-        sent_folder = prompt_with_default(
-            "Sent-Ordner fuer Kontakt-Material (z.B. 'Sent', 'Gesendet', leer=nur INBOX)", cfg.sent_folder)
+        sent_folder = prompt_with_default(t("interactive.label_sent_folder"), cfg.sent_folder)
 
     cfg.prompt_file = prompt_file
     cfg.imap_server = imap_server
@@ -288,6 +290,7 @@ def prompt_all_settings(cfg: Config) -> Config:
     cfg.roles = roles
     cfg.days_back = days_back
     cfg.use_sentdate = use_sentdate
+    cfg.language = language
     cfg.ollama_url = ollama_url
     cfg.model = model
     cfg.auto_triage = auto_triage
@@ -304,26 +307,27 @@ def prompt_all_settings(cfg: Config) -> Config:
 # ============================================================
 def print_config_summary(cfg: Config) -> None:
     """Prints a compact summary of the loaded config."""
-    print("\n--- Aktuelle Konfiguration ---")
-    print(f"  IMAP:       {cfg.imap_server}:{cfg.imap_port}")
-    print(f"  SMTP:       {cfg.smtp_server}:{cfg.smtp_port} (SSL: {cfg.smtp_ssl})")
-    print(f"  Username:   {cfg.username}")
-    print(f"  Von:        {cfg.from_email}")
-    print(f"  An:         {cfg.recipient_email}")
-    print(f"  Name:       {cfg.name}")
+    print(t("interactive.config_summary_header"))
+    print(t("interactive.summary_imap", server=cfg.imap_server, port=cfg.imap_port))
+    print(t("interactive.summary_smtp", server=cfg.smtp_server, port=cfg.smtp_port, ssl=cfg.smtp_ssl))
+    print(t("interactive.summary_username", username=cfg.username))
+    print(t("interactive.summary_from", from_email=cfg.from_email))
+    print(t("interactive.summary_to", recipient=cfg.recipient_email))
+    print(t("interactive.summary_name", name=cfg.name))
     if cfg.roles:
-        print(f"  Rollen:     {cfg.roles}")
-    print(f"  Mailbox:    {cfg.mailbox}")
-    print(f"  Zeitraum:   {cfg.days_back} Tage zurueck")
-    print(f"  LLM:        {cfg.model}")
-    print(f"  Ollama URL: {cfg.ollama_url}")
-    print(f"  Prompt:     {cfg.prompt_file}")
-    print(f"  Auto-Triage:{cfg.auto_triage}")
-    print(f"  Auto-Draft: {cfg.auto_draft}")
-    print(f"  Contacts:   {cfg.auto_contacts_lazy}")
+        print(t("interactive.summary_roles", roles=cfg.roles))
+    print(t("interactive.summary_mailbox", mailbox=cfg.mailbox))
+    print(t("interactive.summary_days", days=cfg.days_back))
+    print(t("interactive.summary_llm", model=cfg.model))
+    print(t("interactive.summary_ollama", url=cfg.ollama_url))
+    print(t("interactive.summary_prompt", prompt=cfg.prompt_file))
+    print(t("interactive.summary_language", language=cfg.language))
+    print(t("interactive.summary_triage", value=cfg.auto_triage))
+    print(t("interactive.summary_draft", value=cfg.auto_draft))
+    print(t("interactive.summary_contacts", value=cfg.auto_contacts_lazy))
     if cfg.auto_contacts_lazy and cfg.sent_folder:
-        print(f"  Sent-Ordner:{cfg.sent_folder}")
-    print("------------------------------")
+        print(t("interactive.summary_sent_folder", value=cfg.sent_folder))
+    print(t("interactive.config_summary_footer"))
 
 
 def prompt_confirm_or_edit(cfg: Config) -> tuple[Config, bool]:
@@ -334,13 +338,12 @@ def prompt_confirm_or_edit(cfg: Config) -> tuple[Config, bool]:
     Returns (Config, edited) -- edited=True if full dialog was used.
     """
     print_config_summary(cfg)
-    edit = prompt_bool_with_default("Einstellungen bearbeiten?", False)
+    edit = prompt_bool_with_default(t("interactive.edit_settings"), False)
     if edit:
         cfg = prompt_all_settings(cfg)
         return cfg, True
     # Even in quick-start mode: time range is run-specific
-    cfg.days_back = prompt_int_with_default(
-        "Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
+    cfg.days_back = prompt_int_with_default(t("interactive.label_days_back"), cfg.days_back)
     return cfg, False
 
 
@@ -372,12 +375,12 @@ def prompt_organization() -> dict | None:
     if not orgs:
         return None
 
-    print("\nOrganisation / E-Mail-Provider waehlen:")
+    print(t("interactive.select_org"))
     for i, org in enumerate(orgs, 1):
         print(f"  {i}) {org['label']}")
-    print(f"  0) Eigener Server (alle Felder manuell eingeben)")
+    print(t("interactive.custom_server_option"))
 
-    raw = input("Auswahl [0]: ").strip()
+    raw = input(t("interactive.select_org_prompt")).strip()
     if not raw or raw == "0":
         return None
 
@@ -385,18 +388,18 @@ def prompt_organization() -> dict | None:
         idx = int(raw)
         if 1 <= idx <= len(orgs):
             org = orgs[idx - 1]
-            print(f"Organisation '{org['label']}' gewaehlt.")
+            print(t("interactive.org_selected", label=org['label']))
             return org
-        print("Ungueltige Nummer. Eigener Server gewaehlt.")
+        print(t("interactive.invalid_org"))
         return None
 
     # Key entered directly
     for org in orgs:
         if org.get("key") == raw:
-            print(f"Organisation '{org['label']}' gewaehlt.")
+            print(t("interactive.org_selected", label=org['label']))
             return org
 
-    print(f"Organisation '{raw}' nicht gefunden. Eigener Server gewaehlt.")
+    print(t("interactive.org_not_found", name=raw))
     return None
 
 
@@ -404,32 +407,32 @@ def prompt_user_settings(cfg: Config) -> Config:
     """
     Prompts only for user-specific fields (server fields are set by org preset).
     """
-    print("\nBenutzer-Einstellungen (Return nimmt jeweils Default):\n")
+    print(t("interactive.user_settings_header"))
 
-    cfg.username = prompt_with_default("Username", cfg.username, required=True)
-    cfg.from_email = prompt_with_default("From E-Mail", cfg.from_email, required=True)
-    cfg.recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email, required=True)
-    cfg.name = prompt_with_default("Name", cfg.name, required=True)
-    cfg.roles = prompt_with_default("Rollen/Zustaendigkeiten (optional, z.B. 'IT-Leitung, Projektmanager')", cfg.roles)
+    cfg.username = prompt_with_default(t("interactive.label_username"), cfg.username, required=True)
+    cfg.from_email = prompt_with_default(t("interactive.label_from_email"), cfg.from_email, required=True)
+    cfg.recipient_email = prompt_with_default(t("interactive.label_recipient_email"), cfg.recipient_email, required=True)
+    cfg.name = prompt_with_default(t("interactive.label_name"), cfg.name, required=True)
+    cfg.roles = prompt_with_default(t("interactive.label_roles"), cfg.roles)
 
-    cfg.prompt_file = prompt_with_default("Prompt-Datei", cfg.prompt_file)
-    cfg.days_back = prompt_int_with_default("Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
+    cfg.prompt_file = prompt_with_default(t("interactive.label_prompt_file"), cfg.prompt_file)
+    cfg.days_back = prompt_int_with_default(t("interactive.label_days_back"), cfg.days_back)
 
-    ollama_url = prompt_with_default("Ollama URL", os.environ.get("OLLAMA_URL", cfg.ollama_url))
+    # Language
+    cfg.language = prompt_with_default(t("interactive.label_language"), cfg.language)
+
+    ollama_url = prompt_with_default(t("interactive.label_ollama_url"), os.environ.get("OLLAMA_URL", cfg.ollama_url))
     cfg.ollama_url = ollama_url
     cfg.model = prompt_model_select(cfg.model, ollama_url)
 
-    cfg.auto_triage = prompt_bool_with_default("Auto-Triage (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_triage)
+    cfg.auto_triage = prompt_bool_with_default(t("interactive.label_auto_triage"), cfg.auto_triage)
 
-    cfg.auto_draft = prompt_bool_with_default(
-        "Auto-Draft (Antwortentwuerfe fuer ACTIONABLE Mails)", cfg.auto_draft)
+    cfg.auto_draft = prompt_bool_with_default(t("interactive.label_auto_draft"), cfg.auto_draft)
     if cfg.auto_draft:
-        cfg.drafts_folder = prompt_with_default("Drafts-Ordner Fallback (wird automatisch erkannt)", cfg.drafts_folder)
+        cfg.drafts_folder = prompt_with_default(t("interactive.label_drafts_folder"), cfg.drafts_folder)
 
-    cfg.auto_contacts_lazy = prompt_bool_with_default(
-        "Auto-Contacts Lazy (bei neuen Sendern automatisch Card bauen)", cfg.auto_contacts_lazy)
+    cfg.auto_contacts_lazy = prompt_bool_with_default(t("interactive.label_auto_contacts"), cfg.auto_contacts_lazy)
     if cfg.auto_contacts_lazy:
-        cfg.sent_folder = prompt_with_default(
-            "Sent-Ordner fuer Kontakt-Material (z.B. 'Sent', 'Gesendet', leer=nur INBOX)", cfg.sent_folder)
+        cfg.sent_folder = prompt_with_default(t("interactive.label_sent_folder"), cfg.sent_folder)
 
     return cfg

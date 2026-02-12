@@ -70,12 +70,14 @@ from email_report.contacts import (
     load_contact, save_contact, format_contact_for_prompt,
     build_contact_card,
 )
+from email_report.llm_profiles import load_llm_profiles
+from email_report.i18n import set_language
 
 
 # ============================================================
 # CLI: contact-build helpers
 # ============================================================
-def _build_single_contact(cfg, addr: str, contact_prompt_base: str) -> bool:
+def _build_single_contact(cfg, addr: str, contact_prompt_base: str, llm_profile: dict | None = None) -> bool:
     """Builds a single contact card via IMAP material collection + LLM.
     Returns True on success."""
     folders = [cfg.mailbox]
@@ -95,6 +97,7 @@ def _build_single_contact(cfg, addr: str, contact_prompt_base: str) -> bool:
     card = build_contact_card(
         cfg.model, addr, cfg.name, cfg.ollama_url,
         contact_prompt_base, collected, existing_contact=existing,
+        llm_profile=llm_profile, language=cfg.language,
     )
     if card:
         save_contact(addr, card)
@@ -104,7 +107,7 @@ def _build_single_contact(cfg, addr: str, contact_prompt_base: str) -> bool:
     return False
 
 
-def _build_top_contacts(cfg, contact_prompt_base: str) -> None:
+def _build_top_contacts(cfg, contact_prompt_base: str, llm_profile: dict | None = None) -> None:
     """Finds top-10 senders without a card and builds cards."""
     print("Collecting sender frequencies (last 90 days)...")
     emails = imap_fetch_emails_for_range(
@@ -142,7 +145,7 @@ def _build_top_contacts(cfg, contact_prompt_base: str) -> None:
     built = 0
     for addr, count in candidates:
         print(f"\nBuilding card for {addr} ({count} emails)...")
-        if _build_single_contact(cfg, addr, contact_prompt_base):
+        if _build_single_contact(cfg, addr, contact_prompt_base, llm_profile=llm_profile):
             built += 1
 
     print(f"\nDone: {built}/{len(candidates)} cards created.")
@@ -171,15 +174,19 @@ def main():
     if cli_args.build_contact or cli_args.build_contacts:
         if cfg is None:
             raise SystemExit("Please create a profile first.")
-        cfg.password = prompt_secret_with_default("Passwort")
+        set_language(cfg.language)
+        llm_profiles = load_llm_profiles()
+        from email_report.i18n import t
+        cfg.password = prompt_secret_with_default(t("interactive.label_password"))
         try:
             contact_prompt_base = load_prompt_file("contact_prompt.txt")
         except FileNotFoundError:
             raise SystemExit("contact_prompt.txt not found.")
+        extraction = llm_profiles["extraction"]
         if cli_args.build_contact:
-            _build_single_contact(cfg, cli_args.build_contact, contact_prompt_base)
+            _build_single_contact(cfg, cli_args.build_contact, contact_prompt_base, llm_profile=extraction)
         else:
-            _build_top_contacts(cfg, contact_prompt_base)
+            _build_top_contacts(cfg, contact_prompt_base, llm_profile=extraction)
         return
 
     edited = False
@@ -203,6 +210,12 @@ def main():
         else:
             # Custom server: full dialog as before
             cfg = prompt_all_settings(cfg)
+
+    # --- Initialize i18n and LLM profiles ---
+    set_language(cfg.language)
+    llm_profiles = load_llm_profiles()
+    extraction_profile = llm_profiles["extraction"]
+    creative_profile = llm_profiles["creative"]
 
     # --- Load prompt file ---
     try:
@@ -232,10 +245,11 @@ def main():
     if edited:
         prompt_save_profile(cfg, default_name=profile_name)
 
+    from email_report.i18n import t
     print("\nConfiguration (note: no default for password):\n")
 
     # Password
-    cfg.password = prompt_secret_with_default("Passwort")
+    cfg.password = prompt_secret_with_default(t("interactive.label_password"))
 
     # Many servers require from_email to match the authenticated username.
     if "@" in cfg.username and cfg.from_email.lower() != cfg.username.lower():
@@ -321,6 +335,8 @@ def main():
                         card = build_contact_card(
                             cfg.model, sender_addr, cfg.name, cfg.ollama_url,
                             contact_prompt_base, collected,
+                            llm_profile=extraction_profile,
+                            language=cfg.language,
                         )
                         if card:
                             save_contact(sender_addr, card)
@@ -348,7 +364,7 @@ def main():
             }
 
         # --- Pass sender_context to LLM analysis ---
-        final_block = _analyze_thread_guaranteed(cfg.model, thread, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, debug=dbg, sender_context=sender_context)
+        final_block = _analyze_thread_guaranteed(cfg.model, thread, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, llm_profile=extraction_profile, debug=dbg, sender_context=sender_context)
 
         if debug_log and debug_file and dbg is not None:
             st0 = (dbg.get('stage0') or {})
@@ -413,6 +429,7 @@ def main():
                         cfg.model, thread, cfg.name, cfg.ollama_url,
                         draft_prompt_base, parsed_block, roles=cfg.roles,
                         sender_context=sender_context,
+                        llm_profile=creative_profile,
                     )
                     if draft_text:
                         draft_msg = build_draft_message(thread, draft_text, cfg.from_email, cfg.name,
@@ -420,7 +437,7 @@ def main():
                         subj_log = (parsed_block.get("subject") or newest.get("subject") or "?")[:80]
                         draft_queue.append((subj_log, draft_msg))
                         draft_stats["generated"] += 1
-                        final_block += "\nDraft-Status: erstellt\n"
+                        final_block += "\nDraft-Status: ok\n"
                     else:
                         draft_stats["failed"] += 1
                         log.warning("Draft LLM returned empty text for: %s",

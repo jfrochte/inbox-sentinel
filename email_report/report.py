@@ -21,6 +21,7 @@ import html
 # ============================================================
 from email_report.utils import write_secure
 from email_report.config import DEFAULT_SORT_FOLDERS
+from email_report.i18n import t
 
 
 # ============================================================
@@ -382,31 +383,31 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
     if items:
         reported = len(items)
         if expected_count is None:
-            parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Anzahl Mails: {reported}</div>")
+            parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">{esc(t('report.count_mails', count=reported))}</div>")
             parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">OK: {status_counts['OK']} | Repaired: {status_counts['REPAIRED']} | Fallback: {status_counts['FALLBACK']}</div>")
             if draft_stats:
                 ds_gen = draft_stats.get("generated", 0)
                 ds_fail = draft_stats.get("failed", 0)
                 if ds_gen or ds_fail:
-                    parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">Drafts: {ds_gen} erstellt, {ds_fail} fehlgeschlagen</div>")
+                    parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">{esc(t('report.drafts_stats', generated=ds_gen, failed=ds_fail))}</div>")
         else:
             if total_emails is not None and total_emails != expected_count:
-                parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Abgerufen: {total_emails} | Threads: {expected_count} | Im Report: {reported}</div>")
+                parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">{esc(t('report.fetched_threads_reported', total=total_emails, threads=expected_count, reported=reported))}</div>")
             else:
-                parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">Abgerufen: {expected_count} | Im Report: {reported}</div>")
+                parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:4px;\">{esc(t('report.fetched_reported', fetched=expected_count, reported=reported))}</div>")
             parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">OK: {status_counts['OK']} | Repaired: {status_counts['REPAIRED']} | Fallback: {status_counts['FALLBACK']}</div>")
             if draft_stats:
                 ds_gen = draft_stats.get("generated", 0)
                 ds_fail = draft_stats.get("failed", 0)
                 if ds_gen or ds_fail:
-                    parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">Drafts: {ds_gen} erstellt, {ds_fail} fehlgeschlagen</div>")
+                    parts.append(f"<div style=\"font-size:12px;color:#6b7280;margin-top:2px;\">{esc(t('report.drafts_stats', generated=ds_gen, failed=ds_fail))}</div>")
             if expected_count != reported:
                 diff = expected_count - reported
                 if diff > 0:
-                    hint = f"{diff} Thread(s) fehlen im Report (erwartet: {expected_count}, vorhanden: {reported})."
+                    hint = t("report.threads_missing", diff=diff, expected=expected_count, reported=reported)
                 else:
-                    hint = f"{-diff} ueberzaehlige Eintraege im Report (erwartet: {expected_count}, vorhanden: {reported})."
-                parts.append(f"<div style=\"margin-top:10px;padding:10px;border-radius:10px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:12px;\"><b>WARNUNG:</b> {esc(hint)}</div>")
+                    hint = t("report.threads_extra", diff=-diff, expected=expected_count, reported=reported)
+                parts.append(f"<div style=\"margin-top:10px;padding:10px;border-radius:10px;border:1px solid #fecaca;background:#fff1f2;color:#991b1b;font-size:12px;\"><b>{esc(t('report.warning_label'))}</b> {esc(hint)}</div>")
     parts.append("</td></tr>")
     parts.append("<tr><td style=\"height:12px;\"></td></tr>")
 
@@ -414,14 +415,14 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         parts.append("<tr><td style=\"font-family:Arial,Helvetica,sans-serif;\">")
         parts.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
                      "style=\"background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;\">")
-        parts.append("<tr><td style=\"padding:14px; color:#374151;\">Keine passenden Mails gefunden.</td></tr></table>")
+        parts.append(f"<tr><td style=\"padding:14px; color:#374151;\">{esc(t('report.no_mails_found'))}</td></tr></table>")
         parts.append("</td></tr>")
         parts.append("</table></td></tr></table></body></html>")
         return "".join(parts)
 
     # Liste
     parts.append("<tr><td style=\"font-family:Arial,Helvetica,sans-serif;\">")
-    parts.append("<div style=\"font-size:14px;font-weight:800;color:#111827;margin-bottom:8px;\">Mails</div>")
+    parts.append(f"<div style=\"font-size:14px;font-weight:800;color:#111827;margin-bottom:8px;\">{esc(t('report.section_mails'))}</div>")
     parts.append("</td></tr>")
 
     for it in items:
@@ -470,16 +471,16 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
             target_folder = DEFAULT_SORT_FOLDERS[cat]
             parts.append(
                 f"<div style=\"margin-top:4px;font-size:12px;color:#6b7280;font-style:italic;\">"
-                f"Verschoben nach: {esc(target_folder)}"
+                f"{esc(t('report.moved_to', folder=target_folder))}"
                 f"</div>"
             )
 
         # Draft hint
         draft_st = (it.get("draft_status") or "").strip().lower()
-        if draft_st == "erstellt":
+        if draft_st == "ok":
             parts.append(
                 f"<div style=\"margin-top:4px;font-size:12px;color:#166534;font-style:italic;\">"
-                f"Entwurf erstellt (Drafts)"
+                f"{esc(t('report.draft_created'))}"
                 f"</div>"
             )
 
@@ -487,11 +488,11 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
             parts.append(f"<div style=\"margin-top:10px;color:#374151;line-height:1.45;\">{summary}</div>")
 
         if context:
-            parts.append("<div style=\"margin-top:10px;font-size:12px;font-weight:800;color:#111827;\">Kontext</div>")
+            parts.append(f"<div style=\"margin-top:10px;font-size:12px;font-weight:800;color:#111827;\">{esc(t('report.section_context'))}</div>")
             parts.append(f"<div style=\"margin-top:6px;color:#374151;line-height:1.45;background:#f9fafb;border:1px solid #e5e7eb;border-radius:8px;padding:10px;\">{esc_ml(context)}</div>")
 
         if actions and all(a.lower() not in ("keine.", "keine", "none", "none.") for a in actions):
-            parts.append("<div style=\"margin-top:10px;font-size:12px;font-weight:800;color:#111827;\">Actions</div>")
+            parts.append(f"<div style=\"margin-top:10px;font-size:12px;font-weight:800;color:#111827;\">{esc(t('report.section_actions'))}</div>")
             parts.append("<ul style=\"margin:6px 0 0 18px;padding:0;color:#111827;\">")
             for a in actions:
                 parts.append(f"<li style=\"margin:4px 0;line-height:1.35;\">{esc(a)}</li>")
@@ -499,14 +500,14 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
 
         show_excerpt = bool(raw_excerpt) and (status in ("FALLBACK", "REPAIRED") or p in (1, 2))
         if show_excerpt:
-            parts.append("<div style=\"margin-top:10px;font-size:12px;font-weight:800;color:#111827;\">Excerpt</div>")
+            parts.append(f"<div style=\"margin-top:10px;font-size:12px;font-weight:800;color:#111827;\">{esc(t('report.section_excerpt'))}</div>")
             parts.append(f"<div style=\"margin-top:6px;color:#374151;line-height:1.45;background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px;\">{esc_ml(raw_excerpt)}</div>")
 
         parts.append("</td></tr></table>")
         parts.append("</td></tr>")
 
     parts.append("<tr><td style=\"font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#9ca3af;padding-top:8px;\">")
-    parts.append("Hinweis: Inhalt wurde automatisch zusammengefasst. Bitte bei Unklarheiten die Original-Mail oeffnen.")
+    parts.append(esc(t("report.footer_hint")))
     parts.append("</td></tr>")
 
     parts.append("</table></td></tr></table></body></html>")

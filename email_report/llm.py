@@ -21,6 +21,7 @@ import requests
 from email_report.utils import log, _tail_text
 from email_report.report import _parse_llm_summary_block
 from email_report.threading import format_thread_for_llm
+from email_report.llm_profiles import profile_to_options
 
 
 # ============================================================
@@ -158,7 +159,7 @@ def _build_user_context(person: str) -> str:
     return "\n".join(lines) + "\n\n"
 
 
-def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None, num_ctx: int = 32768, sender_context: str = "") -> str:
+def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None, options: dict | None = None, sender_context: str = "") -> str:
     headers = {"Content-Type": "application/json"}
 
     # Prepare roles string: if filled -> formatted line, else empty
@@ -180,10 +181,7 @@ def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_ur
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "num_ctx": num_ctx,
-            "num_predict": 4000,
-        },
+        "options": options or {"num_ctx": 32768, "num_predict": 4000},
     }
 
     try:
@@ -269,8 +267,9 @@ def _compact_excerpt(body: str, limit: int = 450) -> str:
 
 
 def _make_fallback_block(email_obj: dict, person: str, reason: str) -> str:
-    subj = (email_obj.get("subject") or "").strip() or "(ohne Betreff)"
-    sender = (email_obj.get("from") or "").strip() or "(unbekannt)"
+    from email_report.i18n import t
+    subj = (email_obj.get("subject") or "").strip() or t("llm.fallback_no_subject")
+    sender = (email_obj.get("from") or "").strip() or t("llm.fallback_unknown_sender")
     excerpt = _compact_excerpt(email_obj.get("body") or "")
     # Priority intentionally 2: should be visible, but not as urgent as level 1.
     block = (
@@ -282,8 +281,8 @@ def _make_fallback_block(email_obj: dict, person: str, reason: str) -> str:
         f"Asked-Directly: NO\n"
         f"Priority: 2\n"
         f"LLM-Status: FALLBACK\n"
-        f"Actions for {person}: Originalmail oeffnen und pruefen\n"
-        f"Summary: LLM Output unbrauchbar ({reason}). Bitte Original-Mail pruefen.\n"
+        f"Actions for {person}: {t('llm.fallback_open_original')}\n"
+        f"Summary: {t('llm.fallback_unusable', reason=reason)}\n"
     )
     if excerpt:
         block += f"Raw-Excerpt: {excerpt}\n"
@@ -323,8 +322,9 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
                                  thread_size: int = 1) -> str:
     """Produces a clean block (one label per line) regardless of how the LLM responds.
     Then applies deterministic rules (addressing override, self-sent, SPAM/PHISHING, LIST cap)."""
-    subj = (parsed.get("subject") or "").strip() or (email_obj.get("subject") or "").strip() or "(ohne Betreff)"
-    sender = (parsed.get("sender") or "").strip() or (email_obj.get("from") or "").strip() or "(unbekannt)"
+    from email_report.i18n import t
+    subj = (parsed.get("subject") or "").strip() or (email_obj.get("subject") or "").strip() or t("llm.fallback_no_subject")
+    sender = (parsed.get("sender") or "").strip() or (email_obj.get("from") or "").strip() or t("llm.fallback_unknown_sender")
 
     category = (parsed.get("category") or "ACTIONABLE").strip().upper()
     if category not in ALLOWED_CATEGORY:
@@ -346,8 +346,8 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
         prio = 5
 
     context = (parsed.get("context") or "").strip()
-    actions = (parsed.get("actions") or "").strip() or "Keine."
-    summary = (parsed.get("summary") or "").strip() or "Unklar. Bitte Original-Mail pruefen."
+    actions = (parsed.get("actions") or "").strip() or t("llm.fallback_default_actions")
+    summary = (parsed.get("summary") or "").strip() or t("llm.fallback_default_summary")
 
     # --- Deterministic post-processing rules ---
 
@@ -355,16 +355,16 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
     if detected_addressing and detected_addressing in ALLOWED_ADDRESSING:
         addressing = detected_addressing
 
-    # Rule: self-sent (prompt line 37): Priority=5, Asked=NO, Actions="Keine."
+    # Rule: self-sent (prompt line 37): Priority=5, Asked=NO, Actions="None."
     if is_self_sent:
         prio = 5
         asked = "NO"
-        actions = "Keine."
+        actions = t("llm.fallback_default_actions")
 
-    # Rule: SPAM/PHISHING (prompt lines 31-32): Priority=5, Actions="Keine."
+    # Rule: SPAM/PHISHING (prompt lines 31-32): Priority=5, Actions="None."
     if category in ("SPAM", "PHISHING"):
         prio = 5
-        actions = "Keine."
+        actions = t("llm.fallback_default_actions")
 
     # Rule: LIST + Asked NO (prompt line 62): Priority must not be 1 -> cap at 2
     if addressing == "LIST" and asked == "NO" and prio == 1:
@@ -396,16 +396,13 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
     return block
 
 
-def _ollama_generate(model: str, prompt: str, ollama_url: str, num_predict: int = 4000, debug: dict | None = None) -> str:
+def _ollama_generate(model: str, prompt: str, ollama_url: str, options: dict | None = None, debug: dict | None = None) -> str:
     headers = {"Content-Type": "application/json"}
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "num_ctx": 32768,
-            "num_predict": num_predict,
-        },
+        "options": options or {"num_ctx": 32768, "num_predict": 4000},
     }
     resp = requests.post(ollama_url, json=payload, headers=headers, timeout=180)
     if debug is not None:
@@ -436,15 +433,16 @@ def _ollama_generate(model: str, prompt: str, ollama_url: str, num_predict: int 
     return (text or "").strip()
 
 
-def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_output: str, ollama_url: str, roles: str = "", debug: dict | None = None) -> str:
+def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_output: str, ollama_url: str, roles: str = "", llm_profile: dict | None = None, debug: dict | None = None) -> str:
     """Second pass: format repair only. Very strict so the parser can work cleanly again."""
+    from email_report.i18n import t
     user_context = _build_user_context(person)
     repair_prompt = (
         user_context
-        + "Du bist ein strikter Formatter. Antworte NUR mit dem Block zwischen <<BEGIN>> und <<END>>.\n"
-        "Keine Erklaerungen, kein Markdown, keine Zusatzzeilen.\n\n"
-        "Format (alle Labels muessen genau einmal vorkommen):\n"
-        f"<<BEGIN>>\n"
+        + t("llm.repair_instruction")
+        + "\n"
+        + t("llm.repair_format_header")
+        + f"<<BEGIN>>\n"
         "Subject: ...\n"
         "Sender: ...\n"
         "Category: SPAM | PHISHING | FYI | ACTIONABLE\n"
@@ -455,20 +453,21 @@ def _repair_summary_via_ollama(model: str, person: str, email_text: str, broken_
         f"Actions for {person}: ...\n"
         "Summary: ...\n"
         "<<END>>\n\n"
-        "DEFAULTS wenn unklar: Category=ACTIONABLE, Addressing=UNKNOWN, Asked-Directly=NO, Priority=5, Actions=Keine., Summary=Unklar. Bitte Original-Mail pruefen.\n\n"
-        "E-Mail (inklusive Historie als Kontext):\n"
-        "-----\n"
-        + email_text[:12000] +
-        "\n-----\n\n"
-        "Zu reparierender Modell-Output:\n"
-        "-----\n"
-        + _tail_text((broken_output or ""), 6000) +
-        "\n-----\n"
+        + t("llm.repair_defaults")
+        + t("llm.repair_email_header")
+        + "-----\n"
+        + email_text[:12000]
+        + "\n-----\n\n"
+        + t("llm.repair_broken_header")
+        + "-----\n"
+        + _tail_text((broken_output or ""), 6000)
+        + "\n-----\n"
     )
-    return _ollama_generate(model, repair_prompt, ollama_url, num_predict=4000, debug=debug)
+    opts = profile_to_options(llm_profile, is_thread=False) if llm_profile else None
+    return _ollama_generate(model, repair_prompt, ollama_url, options=opts, debug=debug)
 
 
-def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, roles: str = "", person_email: str = "", debug: dict | None = None, sender_context: str = "") -> str:
+def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_url: str, prompt_base: str, roles: str = "", person_email: str = "", llm_profile: dict | None = None, debug: dict | None = None, sender_context: str = "") -> str:
     """Main logic: guarantees exactly one valid block per email."""
     # Deterministic addressing detection
     detected_addressing, is_self_sent = _detect_addressing(email_obj, person, person_email)
@@ -489,10 +488,12 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
 
     raw_excerpt = _compact_excerpt(email_obj.get("body") or "")
 
+    opts = profile_to_options(llm_profile, is_thread=False) if llm_profile else None
+
     # 1) First attempt
     try:
         stage0 = {} if debug is not None else None
-        out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base, roles=roles, debug=stage0, sender_context=sender_context)
+        out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base, roles=roles, debug=stage0, options=opts, sender_context=sender_context)
         if debug is not None:
             debug['stage0'] = stage0
     except Exception as e:
@@ -523,7 +524,7 @@ def _analyze_email_guaranteed(model: str, email_obj: dict, person: str, ollama_u
     # 2) Repair pass
     try:
         stage1 = {} if debug is not None else None
-        repaired = _repair_summary_via_ollama(model, person, email_text, out0, ollama_url, roles=roles, debug=stage1)
+        repaired = _repair_summary_via_ollama(model, person, email_text, out0, ollama_url, roles=roles, llm_profile=llm_profile, debug=stage1)
         if debug is not None:
             debug['stage1'] = stage1
         block1 = _extract_marked_block(repaired)
@@ -591,11 +592,13 @@ def _detect_addressing_for_thread(thread: list[dict], person: str, person_email:
 
 def _analyze_thread_guaranteed(model: str, thread: list[dict], person: str, ollama_url: str,
                                prompt_base: str, roles: str = "", person_email: str = "",
+                               llm_profile: dict | None = None,
                                debug: dict | None = None, sender_context: str = "") -> str:
     """Thread-aware analysis. Single mail delegates to _analyze_email_guaranteed (zero regression)."""
     if len(thread) == 1:
         return _analyze_email_guaranteed(model, thread[0], person, ollama_url, prompt_base,
-                                         roles=roles, person_email=person_email, debug=debug,
+                                         roles=roles, person_email=person_email,
+                                         llm_profile=llm_profile, debug=debug,
                                          sender_context=sender_context)
 
     # Thread with 2+ mails
@@ -611,11 +614,13 @@ def _analyze_thread_guaranteed(model: str, thread: list[dict], person: str, olla
     email_text = format_thread_for_llm(thread)
     raw_excerpt = _compact_excerpt(newest.get("body") or "")
 
+    opts = profile_to_options(llm_profile, is_thread=True) if llm_profile else {"num_ctx": 65536, "num_predict": 4000}
+
     # 1) First attempt
     try:
         stage0 = {} if debug is not None else None
         out0 = analyze_email_via_ollama(model, email_text, person, ollama_url, prompt_base,
-                                        roles=roles, debug=stage0, num_ctx=65536,
+                                        roles=roles, debug=stage0, options=opts,
                                         sender_context=sender_context)
         if debug is not None:
             debug['stage0'] = stage0
@@ -648,7 +653,7 @@ def _analyze_thread_guaranteed(model: str, thread: list[dict], person: str, olla
     # 2) Repair pass
     try:
         stage1 = {} if debug is not None else None
-        repaired = _repair_summary_via_ollama(model, person, email_text, out0, ollama_url, roles=roles, debug=stage1)
+        repaired = _repair_summary_via_ollama(model, person, email_text, out0, ollama_url, roles=roles, llm_profile=llm_profile, debug=stage1)
         if debug is not None:
             debug['stage1'] = stage1
         block1 = _extract_marked_block(repaired)

@@ -109,6 +109,9 @@ class Config:
     # Prompt
     prompt_file: str = "prompt.txt"
 
+    # UI language (en, de, ...)
+    language: str = "en"
+
     # Auto-triage: move emails to IMAP subfolders based on LLM category
     auto_triage: bool = True
 

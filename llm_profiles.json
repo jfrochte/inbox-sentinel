@@ -1,0 +1,16 @@
+{
+  "extraction": {
+    "num_ctx": 32768,
+    "num_ctx_thread": 65536,
+    "num_predict": 4000,
+    "temperature": 0.1,
+    "top_p": 0.85
+  },
+  "creative": {
+    "num_ctx": 32768,
+    "num_ctx_thread": 65536,
+    "num_predict": 4000,
+    "temperature": 0.7,
+    "top_p": 0.9
+  }
+}

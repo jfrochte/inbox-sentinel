@@ -31,6 +31,7 @@ import requests
 # ============================================================
 from email_report.utils import log
 from email_report.threading import format_thread_for_llm, normalize_subject
+from email_report.llm_profiles import profile_to_options
 
 
 # ============================================================
@@ -38,7 +39,7 @@ from email_report.threading import format_thread_for_llm, normalize_subject
 # ============================================================
 def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url: str,
                         draft_prompt_base: str, parsed_analysis: dict, roles: str = "",
-                        sender_context: str = "") -> str:
+                        sender_context: str = "", llm_profile: dict | None = None) -> str:
     """
     Generates a reply draft via LLM.
 
@@ -64,16 +65,18 @@ def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url:
         email_text=email_text,
     )
 
-    num_ctx = 65536 if len(thread) >= 2 else 32768
+    is_thread = len(thread) >= 2
+    if llm_profile:
+        opts = profile_to_options(llm_profile, is_thread=is_thread)
+    else:
+        num_ctx = 65536 if is_thread else 32768
+        opts = {"num_ctx": num_ctx, "num_predict": 4000}
 
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "num_ctx": num_ctx,
-            "num_predict": 4000,
-        },
+        "options": opts,
     }
 
     try:
@@ -122,6 +125,7 @@ _REPLY_PREFIX_RE = re.compile(r"^(Re|AW|Antwort|Antw|SV|VS|Ref)\s*:\s*", re.IGNO
 
 def _build_full_quote(newest: dict) -> str:
     """Builds the full-quote block from the newest mail in the thread."""
+    from email_report.i18n import t
     original = (newest.get("body_original") or newest.get("body") or "").strip()
     if not original:
         return ""
@@ -130,7 +134,7 @@ def _build_full_quote(newest: dict) -> str:
     date = (newest.get("date") or "").strip()
 
     quoted = "\n".join("> " + line for line in original.splitlines())
-    return f"Am {date} schrieb {sender}:\n{quoted}"
+    return f"{t('drafts.quote_header', date=date, sender=sender)}\n{quoted}"
 
 
 def _load_signature(signature_file: str) -> str:

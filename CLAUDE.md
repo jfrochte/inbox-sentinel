@@ -2,8 +2,9 @@
 
 ## Language & Output
 - `prompt.txt` and `draft_prompt.txt` are written in English
-- LLM output fields (Summary, Context, Actions) MUST be in German
+- LLM output fields (Summary, Context, Actions) match the email's language (auto-detect via prompt)
 - LLM must use full names (first + last), never first names only
+- `language` config field controls UI language (default: `"en"`). No language gets special status.
 
 ## Privacy & Git
 - NEVER put real person names in prompt files or committed code — use "Max Mustermann"
@@ -13,9 +14,11 @@
 ## Module Dependencies
 - Import direction: `llm` imports from `report` AND `threading` (not reverse) to avoid circular imports
 - `threading.py` is a leaf module (no package deps, only `re`)
-- `drafts.py` is a leaf module (imports from `threading` + `utils` only)
+- `drafts.py` is a leaf module (imports from `threading` + `utils` + `llm_profiles` + `i18n`)
 - `vcard.py` is a leaf module (`utils` only)
-- `contacts.py` imports from `utils` + `vcard` + `requests`
+- `contacts.py` imports from `utils` + `vcard` + `llm_profiles` + `requests`
+- `i18n.py` is a leaf module (no package deps, only `json` + `os`)
+- `llm_profiles.py` is a leaf module (no package deps, only `json` + `os`)
 
 ## Categories
 - Valid categories: SPAM, PHISHING, FYI, ACTIONABLE (default)

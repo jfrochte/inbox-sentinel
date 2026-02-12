@@ -30,6 +30,7 @@ import requests
 # ============================================================
 from email_report.utils import log
 from email_report.vcard import read_vcard, write_vcard
+from email_report.llm_profiles import profile_to_options
 
 
 # ============================================================
@@ -43,6 +44,8 @@ _PRODID = "-//Inbox Sentinel//EN"
 _SKIP_VALUES = frozenset({
     "nicht bestimmbar", "nicht beurteilbar", "unbekannt",
     "keine neuen informationen", "n/a", "-", "\u2014", "",
+    "not determinable", "unknown", "not assessable",
+    "no new information",
 })
 
 # Regex for phone numbers in signatures
@@ -574,10 +577,15 @@ def _format_emails_for_contact_prompt(emails: list[dict]) -> str:
     return "\n".join(parts)
 
 
+_LANG_NAMES = {"de": "German", "en": "English", "fr": "French", "es": "Spanish", "it": "Italian", "nl": "Dutch", "pt": "Portuguese"}
+
+
 def build_contact_card(model: str, contact_addr: str, person: str,
                        ollama_url: str, contact_prompt_base: str,
                        collected_emails: list[dict],
-                       existing_contact: dict | None = None) -> dict | None:
+                       existing_contact: dict | None = None,
+                       llm_profile: dict | None = None,
+                       language: str = "en") -> dict | None:
     """
     Builds a contact card from collected IMAP material.
 
@@ -614,19 +622,19 @@ def build_contact_card(model: str, contact_addr: str, person: str,
     # --- LLM call ---
     llm_info = {}
     email_section = _format_emails_for_contact_prompt(collected_emails)
-    prompt = contact_prompt_base.replace("{person}", person)
+    note_language = _LANG_NAMES.get(language, language)
+    prompt = contact_prompt_base.replace("{person}", person).replace("{note_language}", note_language)
     prompt += f"\nThe contact is: {contact_addr}\n\n{email_section}\n"
+
+    opts = profile_to_options(llm_profile, is_thread=False) if llm_profile else {
+        "num_ctx": 32768, "num_predict": 4000, "temperature": 0.1, "top_p": 0.85,
+    }
 
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": False,
-        "options": {
-            "num_ctx": 32768,
-            "num_predict": 4000,
-            "temperature": 0.1,
-            "top_p": 0.85,
-        },
+        "options": opts,
     }
 
     try:

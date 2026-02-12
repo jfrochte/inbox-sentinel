@@ -12,35 +12,38 @@ Write a free-text communication profile (NOTE field) that captures the DYNAMICS 
 - What topics/domains come up? What goes beyond the contact's formal role?
 - Patterns, priorities, and values visible in the exchange
 - Relationship context (colleague, external partner, supervisor, student, etc.)
+- Which language(s) does the contact use in their emails? State this explicitly in the NOTE.
 
 Also extract structured fields from the contact's signature and self-statements ONLY.
 
 CRITICAL ANTI-HALLUCINATION RULES:
 - ONLY state facts DIRECTLY EVIDENT from the emails provided.
-- For ORG/TITLE/ROLE: only if explicitly present in signature, From line, or clear first-person self-identification by the CONTACT. Otherwise: "nicht bestimmbar".
+- For ORG/TITLE/ROLE: only if explicitly present in signature, From line, or clear first-person self-identification by the CONTACT. Otherwise: "not determinable".
 - NEVER invent titles, roles, affiliations, or organizational details.
 - Do NOT confuse {person}'s attributes with the contact's.
-- If there are only [OUTGOING] emails (no [INCOMING]), you can describe {person}'s communication style toward the contact but mark the contact's style as "nicht bestimmbar (keine eingehenden Mails)".
+- If there are only [OUTGOING] emails (no [INCOMING]), you can describe {person}'s communication style toward the contact but mark the contact's style as "not determinable (no incoming emails)".
 
 NOTE STYLE:
-- Write in German, free-form prose (no rigid Ton/Stil/Beziehung labels).
+- Write the NOTE in {note_language}.
+- Free-form prose (no rigid labels like Tone/Style/Relationship).
 - Be specific and concrete where the emails support it.
 - Keep it concise but informative (4-10 lines).
 - The NOTE should help {person} quickly recall who this contact is and how to best communicate with them.
+- Always mention which language(s) the contact communicates in.
 
 CATEGORIES:
-- Assign 1-3 comma-separated tags that classify the relationship (e.g. "Kollege,Hochschule", "Externer Dienstleister", "Student", "Verwaltung").
+- Assign 1-3 comma-separated tags that classify the relationship (e.g. "Kollege,Hochschule", "External Partner", "Student", "Administration").
 
 LANGUAGE RULE:
-All values MUST be in German.
+Write the NOTE and all values in {note_language}.
 
 OUTPUT FORMAT (exactly this structure, nothing else):
 
 <<BEGIN>>
-ORG: [Organisation/Arbeitgeber oder "nicht bestimmbar"]
-TITLE: [Jobtitel oder "nicht bestimmbar"]
-ROLE: [Funktion/Rolle oder "nicht bestimmbar"]
-CATEGORIES: [Kommaseparierte Tags oder leer]
+ORG: [organization/employer or "not determinable"]
+TITLE: [job title or "not determinable"]
+ROLE: [function/role or "not determinable"]
+CATEGORIES: [comma-separated tags or empty]
 NOTE:
-[Freitext, mehrere Zeilen, auf Deutsch]
+[free text, multiple lines, in {note_language}]
 <<END>>
