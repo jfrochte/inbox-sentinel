@@ -71,6 +71,11 @@ const stats = computed(() => {
           {{ stats.categories.ACTIONABLE }}x {{ t('stats.actionable') }}
         </div>
       </div>
+
+      <!-- Attachment warning -->
+      <p class="text-muted" style="font-size: 12px; margin-top: 12px;">
+        {{ t('stats.attachmentHint') }}
+      </p>
     </div>
 
     <HealthPanel />

@@ -57,7 +57,8 @@
     "spam": "SPAM",
     "fyi": "FYI",
     "actionable": "Handlungsbedarf",
-    "triaged": "Sortiert"
+    "triaged": "Sortiert",
+    "attachmentHint": "Anhaenge werden nicht analysiert. Wichtige Informationen koennten in Anhaengen verborgen sein."
   },
   "profile": {
     "title": "Profile",

@@ -57,7 +57,8 @@
     "spam": "SPAM",
     "fyi": "FYI",
     "actionable": "Actionable",
-    "triaged": "Triaged"
+    "triaged": "Triaged",
+    "attachmentHint": "Attachments are not analyzed. Important information may be hidden in attachments."
   },
   "profile": {
     "title": "Profiles",

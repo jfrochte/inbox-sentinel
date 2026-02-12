@@ -172,6 +172,7 @@ Key environment variables:
 
 - LLM classifications are not reliable -- the model may miscategorize emails. Deterministic rules in code correct the most critical cases (SPAM/PHISHING priority, self-sent detection, addressing), but category assignment still depends on the LLM.
 - Auto-triage uses a crash-safe copy-before-delete approach: the copy in the target folder is verified before the original is marked as deleted. With UIDPLUS (RFC 4315), only our specific UIDs are expunged; without UIDPLUS, originals are only marked `\Deleted` (no EXPUNGE) and cleaned up by the server/client later. Each run re-processes all emails in the date range so that priorities can be updated by re-running with a better model.
+- **Attachments are not analyzed.** Only the text body of emails is sent to the LLM. File attachments (PDFs, images, spreadsheets, etc.) are ignored. Important information hidden in attachments will not be reflected in the summary, priority, or category.
 - LLM output fields (Summary, Context, Actions) match the email's language (auto-detected). The prompt instructions are in English.
 - Tested primarily with Dovecot-based IMAP servers. Other servers may behave differently.
 
@@ -352,6 +353,7 @@ Wichtige Environment-Variablen:
 
 - LLM-Klassifikationen sind nicht zuverlaessig -- das Modell kann E-Mails falsch einordnen. Deterministische Regeln im Code korrigieren die kritischsten Faelle (SPAM/PHISHING-Prioritaet, Self-Sent-Erkennung, Addressing), aber die Kategorie-Zuordnung haengt weiterhin vom LLM ab.
 - Auto-Triage nutzt einen crash-sicheren Copy-before-Delete-Ansatz: die Kopie im Zielordner wird verifiziert bevor das Original als geloescht markiert wird. Mit UIDPLUS (RFC 4315) werden nur unsere spezifischen UIDs entfernt; ohne UIDPLUS werden Originale nur als `\Deleted` markiert (kein EXPUNGE) und spaeter vom Server/Client aufgeraeumt. Jeder Lauf verarbeitet alle E-Mails im Zeitraum neu, sodass Prioritaeten durch erneuten Lauf mit besserem Modell aktualisiert werden koennen.
+- **Anhaenge werden nicht analysiert.** Nur der Textkoerper der E-Mails wird an das LLM gesendet. Datei-Anhaenge (PDFs, Bilder, Tabellen etc.) werden ignoriert. Wichtige Informationen in Anhaengen fliessen nicht in Zusammenfassung, Prioritaet oder Kategorie ein.
 - LLM-Ausgabefelder (Summary, Context, Actions) passen sich der E-Mail-Sprache an (automatische Erkennung). Die Prompt-Anweisungen sind auf Englisch.
 - Primaer mit Dovecot-basierten IMAP-Servern getestet. Andere Server koennten sich anders verhalten.
 
