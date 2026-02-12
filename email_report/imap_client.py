@@ -18,11 +18,6 @@ import re
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-# tqdm is optional: provides progress bars when installed.
-try:
-    from tqdm import tqdm
-except Exception:
-    tqdm = None
 
 # ============================================================
 # Internal package imports
@@ -41,7 +36,9 @@ from email_report.email_parser import (
 # ============================================================
 def imap_fetch_emails_for_range(username: str, password: str, from_email: str, days_back: int,
                                 imap_server: str, imap_port: int, mailbox: str,
-                                use_sentdate: bool, skip_own_sent: bool = True):
+                                use_sentdate: bool, skip_own_sent: bool = True,
+                                progress_cb=None,
+                                start_date=None, end_date=None):
     """
     Returns a list of dicts:
     {
@@ -65,10 +62,15 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
     skip_own_sent: If True, own sent mails are skipped.
     """
     # Time range:
-    # days_back = 0  -> today only
-    # days_back = 2  -> today + the last 2 days (3 calendar days total)
-    start_day = (datetime.now() - timedelta(days=days_back)).date()      # inclusive
-    end_day_excl = datetime.now().date() + timedelta(days=1)            # exclusive (tomorrow)
+    # If explicit start_date/end_date are given, use them.
+    # Otherwise: days_back = 0  -> today only
+    #            days_back = 2  -> today + the last 2 days (3 calendar days total)
+    if start_date and end_date:
+        start_day = start_date
+        end_day_excl = end_date + timedelta(days=1)   # end_date is inclusive, IMAP BEFORE is exclusive
+    else:
+        start_day = (datetime.now() - timedelta(days=days_back)).date()      # inclusive
+        end_day_excl = datetime.now().date() + timedelta(days=1)            # exclusive (tomorrow)
 
     since_str = start_day.strftime("%d-%b-%Y")
     before_str = end_day_excl.strftime("%d-%b-%Y")
@@ -100,11 +102,10 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
         if not msg_ids:
             return []
 
-        iterator = msg_ids
-        if tqdm is not None:
-            iterator = tqdm(msg_ids, desc="Downloading emails")
-
-        for uid_bytes in iterator:
+        total = len(msg_ids)
+        for i, uid_bytes in enumerate(msg_ids):
+            if progress_cb:
+                progress_cb("fetching", i + 1, total)
             typ, msg_data = mail.uid('fetch', uid_bytes, "(BODY.PEEK[])")
             if typ != "OK":
                 continue

@@ -9,6 +9,10 @@ venv/
 profiles/*.json
 contacts/*.vcf
 
+# Frontend build artifacts
+gui/frontend/node_modules/
+gui/frontend/dist/
+
 # Report temp files (may contain email content)
 zusammenfassung_*.txt
 zusammenfassung-sortiert_*.txt

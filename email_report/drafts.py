@@ -24,14 +24,13 @@ from email.utils import formatdate
 _QP_UTF8 = _charset.Charset('utf-8')
 _QP_UTF8.body_encoding = _charset.QP
 
-import requests
-
 # ============================================================
 # Internal package imports
 # ============================================================
 from email_report.utils import log
 from email_report.threading import format_thread_for_llm, normalize_subject
 from email_report.llm_profiles import profile_to_options
+from email_report.llm import _session
 
 
 # ============================================================
@@ -80,8 +79,7 @@ def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url:
     }
 
     try:
-        resp = requests.post(ollama_url, json=payload,
-                             headers={"Content-Type": "application/json"}, timeout=180)
+        resp = _session.post(ollama_url, json=payload, timeout=180)
         if resp.status_code != 200:
             log.warning("Draft-LLM HTTP %d: %s", resp.status_code, resp.text[:200])
             return ""

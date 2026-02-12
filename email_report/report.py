@@ -440,7 +440,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         raw_excerpt = (it.get("raw_excerpt") or "").strip()
         thread_size = int(it.get("thread_size", 1) or 1)
 
-        parts.append("<tr><td style=\"padding-bottom:10px;\">")
+        parts.append(f"<tr class=\"email-card\" data-priority=\"{p}\" data-category=\"{cat}\"><td style=\"padding-bottom:10px;\">")
         parts.append("<table role=\"presentation\" width=\"100%\" cellpadding=\"0\" cellspacing=\"0\" "
                      "style=\"background:#ffffff;border:1px solid #e5e7eb;border-radius:10px;\">")
         parts.append("<tr><td style=\"padding:12px 14px;\">")

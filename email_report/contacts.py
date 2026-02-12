@@ -23,14 +23,13 @@ import re
 import uuid
 from datetime import datetime, timezone
 
-import requests
-
 # ============================================================
 # Internal package imports
 # ============================================================
 from email_report.utils import log
 from email_report.vcard import read_vcard, write_vcard
 from email_report.llm_profiles import profile_to_options
+from email_report.llm import _session
 
 
 # ============================================================
@@ -638,12 +637,7 @@ def build_contact_card(model: str, contact_addr: str, person: str,
     }
 
     try:
-        resp = requests.post(
-            ollama_url,
-            json=payload,
-            headers={"Content-Type": "application/json"},
-            timeout=120,
-        )
+        resp = _session.post(ollama_url, json=payload, timeout=120)
         if resp.status_code == 200:
             text = _extract_response_text(resp.json())
             if text:

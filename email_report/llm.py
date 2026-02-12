@@ -23,6 +23,12 @@ from email_report.report import _parse_llm_summary_block
 from email_report.threading import format_thread_for_llm
 from email_report.llm_profiles import profile_to_options
 
+# ============================================================
+# Shared HTTP session for connection reuse (TCP keep-alive)
+# ============================================================
+_session = requests.Session()
+_session.headers.update({"Content-Type": "application/json"})
+
 
 # ============================================================
 # Allowed values for validation
@@ -160,20 +166,20 @@ def _build_user_context(person: str) -> str:
 
 
 def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_url: str, prompt_base: str, roles: str = "", debug: dict | None = None, options: dict | None = None, sender_context: str = "") -> str:
-    headers = {"Content-Type": "application/json"}
-
     # Prepare roles string: if filled -> formatted line, else empty
     roles_line = f"\nRoles and responsibilities: {roles}\n" if roles else ""
 
-    # User context + replace placeholders
+    # Prompt order: fixed prompt_base first (maximises Ollama KV cache prefix reuse),
+    # then variable user context / sender context, then email text.
     user_context = _build_user_context(person)
     base = prompt_base.format(person=person, roles=roles_line)
 
     prompt = (
-        user_context
+        base
+        + "\n"
+        + user_context
         + sender_context
-        + base
-        + "\n--- EMAIL START ---\n"
+        + "--- EMAIL START ---\n"
         + email_text
     )
 
@@ -185,7 +191,7 @@ def analyze_email_via_ollama(model: str, email_text: str, person: str, ollama_ur
     }
 
     try:
-        resp = requests.post(ollama_url, json=payload, headers=headers, timeout=180)
+        resp = _session.post(ollama_url, json=payload, timeout=180)
 
         if debug is not None:
             debug["http_status"] = resp.status_code
@@ -397,14 +403,13 @@ def _canonical_block_from_parsed(parsed: dict, email_obj: dict, person: str, sta
 
 
 def _ollama_generate(model: str, prompt: str, ollama_url: str, options: dict | None = None, debug: dict | None = None) -> str:
-    headers = {"Content-Type": "application/json"}
     payload = {
         "model": model,
         "prompt": prompt,
         "stream": False,
         "options": options or {"num_ctx": 32768, "num_predict": 4000},
     }
-    resp = requests.post(ollama_url, json=payload, headers=headers, timeout=180)
+    resp = _session.post(ollama_url, json=payload, timeout=180)
     if debug is not None:
         debug["http_status"] = resp.status_code
         debug["resp_text_len"] = len(resp.text or "")

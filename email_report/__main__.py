@@ -1,8 +1,15 @@
 """
-__main__.py – Erlaubt den Aufruf via `python -m email_report`.
+__main__.py -- Entry point: starts the GUI server.
+
+Usage: python -m email_report
 """
 
-from email_report.main import main
+import uvicorn
+
+
+def main():
+    uvicorn.run("gui.server:app", host="127.0.0.1", port=8741, log_level="info")
+
 
 if __name__ == "__main__":
     main()
