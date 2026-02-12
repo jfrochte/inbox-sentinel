@@ -1,14 +1,4 @@
-"""
-organizations.py – Organisations-Presets fuer IMAP/SMTP-Server.
-
-Blattmodul ohne interne Paket-Abhaengigkeiten.
-Enthaelt nur oeffentliche Server-Adressen und Ports – keine Geheimnisse.
-"""
-
-# ============================================================
-# Organisations-Presets
-# ============================================================
-ORGANIZATIONS = [
+[
     {
         "key": "hs-bochum",
         "label": "Hochschule Bochum",
@@ -16,7 +6,7 @@ ORGANIZATIONS = [
         "imap_port": 993,
         "smtp_server": "mail.hs-bochum.de",
         "smtp_port": 587,
-        "smtp_ssl": False,
+        "smtp_ssl": false
     },
     {
         "key": "gmail",
@@ -25,7 +15,7 @@ ORGANIZATIONS = [
         "imap_port": 993,
         "smtp_server": "smtp.gmail.com",
         "smtp_port": 465,
-        "smtp_ssl": True,
+        "smtp_ssl": true
     },
     {
         "key": "outlook",
@@ -34,7 +24,7 @@ ORGANIZATIONS = [
         "imap_port": 993,
         "smtp_server": "smtp.office365.com",
         "smtp_port": 587,
-        "smtp_ssl": False,
+        "smtp_ssl": false
     },
     {
         "key": "ionos",
@@ -43,14 +33,6 @@ ORGANIZATIONS = [
         "imap_port": 993,
         "smtp_server": "smtp.ionos.de",
         "smtp_port": 587,
-        "smtp_ssl": False,
-    },
+        "smtp_ssl": false
+    }
 ]
-
-
-def get_organization(key: str) -> dict | None:
-    """Gibt das Preset-Dict fuer den gegebenen Key zurueck, oder None."""
-    for org in ORGANIZATIONS:
-        if org["key"] == key:
-            return org
-    return None

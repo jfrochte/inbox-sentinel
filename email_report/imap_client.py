@@ -1,20 +1,16 @@
 """
-imap_client.py – IMAP-Verbindung und E-Mail-Abruf.
+imap_client.py -- IMAP connection and email retrieval.
 
-Abhaengigkeiten innerhalb des Pakets:
-  - utils (Logging)
-  - email_parser (Header-Dekodierung, Body-Extraktion)
+Dependencies within the package:
+  - utils (logging)
+  - email_parser (header decoding, body extraction)
 
-Wichtige Aenderung gegenueber der monolithischen Version:
-  skip_own_sent ist jetzt ein expliziter Parameter statt eines globalen Flags
-  (SKIP_OWN_SENT_MAILS). Der Wert wird aus config.skip_own_sent uebergeben.
-
-UID-basierter Fetch: Statt Sequenznummern werden UIDs verwendet,
-da diese ueber Sessions hinweg stabil sind (noetig fuer Auto-Triage).
+UID-based fetch: UIDs are used instead of sequence numbers because
+they remain stable across sessions (required for auto-triage).
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import imaplib
 import email
@@ -22,14 +18,14 @@ import re
 from datetime import datetime, timedelta
 from email.utils import parsedate_to_datetime
 
-# tqdm ist optional: wenn installiert, gibt es Fortschrittsbalken.
+# tqdm is optional: provides progress bars when installed.
 try:
     from tqdm import tqdm
 except Exception:
     tqdm = None
 
 # ============================================================
-# Interne Paket-Imports
+# Internal package imports
 # ============================================================
 from email_report.utils import log
 from email_report.email_parser import (
@@ -41,13 +37,13 @@ from email_report.email_parser import (
 
 
 # ============================================================
-# IMAP Abruf (UID-basiert, Punkt 6: optional SENT* Suche)
+# IMAP fetch (UID-based, optional SENT* search)
 # ============================================================
 def imap_fetch_emails_for_range(username: str, password: str, from_email: str, days_back: int,
                                 imap_server: str, imap_port: int, mailbox: str,
                                 use_sentdate: bool, skip_own_sent: bool = True):
     """
-    Liefert Liste von dicts:
+    Returns a list of dicts:
     {
       'uid': ...,
       'subject': ...,
@@ -58,22 +54,21 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
       'body': ...,
     }
 
-    Der Zeitraum wird als [heute - days_back, morgen) definiert, also inklusiv heute und der letzten days_back Tage.
+    The time range is defined as [today - days_back, tomorrow), i.e. inclusive of today and the last days_back days.
 
-    Suchlogik:
+    Search logic:
     - use_sentdate True: (SENTSINCE <start> SENTBEFORE <end_excl>)
-      basiert auf "Date:" Header (Sendedatum)
+      based on the "Date:" header (send date)
     - use_sentdate False: (SINCE <start> BEFORE <end_excl>)
-      basiert auf INTERNALDATE (Ablagezeit)
+      based on INTERNALDATE (storage time)
 
-    skip_own_sent: Wenn True, werden eigene gesendete Mails uebersprungen.
-    (Ersetzt das fruehere globale SKIP_OWN_SENT_MAILS.)
+    skip_own_sent: If True, own sent mails are skipped.
     """
-    # Zeitraum:
-    # days_back = 0  -> nur heute
-    # days_back = 2  -> heute + die letzten 2 Tage (insgesamt 3 Kalendertage)
-    start_day = (datetime.now() - timedelta(days=days_back)).date()      # inklusiv
-    end_day_excl = datetime.now().date() + timedelta(days=1)            # exklusiv (morgen)
+    # Time range:
+    # days_back = 0  -> today only
+    # days_back = 2  -> today + the last 2 days (3 calendar days total)
+    start_day = (datetime.now() - timedelta(days=days_back)).date()      # inclusive
+    end_day_excl = datetime.now().date() + timedelta(days=1)            # exclusive (tomorrow)
 
     since_str = start_day.strftime("%d-%b-%Y")
     before_str = end_day_excl.strftime("%d-%b-%Y")
@@ -84,14 +79,14 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
     try:
         mail.login(username, password)
 
-        # read-only, damit "Seen" nicht gesetzt wird (sofern Server das respektiert)
+        # read-only to prevent setting \Seen flag
         try:
             mail.select(mailbox, readonly=True)
         except Exception:
             mail.select(mailbox)
 
         if use_sentdate:
-            # SENTSINCE/SENTBEFORE sind standardisiert, aber nicht jeder Server ist 100% kompatibel.
+            # SENTSINCE/SENTBEFORE are standardized but not every server is 100% compatible
             query = f"(NOT DELETED SENTSINCE {since_str} SENTBEFORE {before_str})"
         else:
             query = f"(NOT DELETED SINCE {since_str} BEFORE {before_str})"
@@ -107,7 +102,7 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
 
         iterator = msg_ids
         if tqdm is not None:
-            iterator = tqdm(msg_ids, desc="Download E-Mails")
+            iterator = tqdm(msg_ids, desc="Downloading emails")
 
         for uid_bytes in iterator:
             typ, msg_data = mail.uid('fetch', uid_bytes, "(BODY.PEEK[])")
@@ -127,7 +122,6 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
             from_header = decode_mime_words(message.get("from"))
             from_addr = get_email_address_from_header(from_header).lower()
 
-            # skip_own_sent: expliziter Parameter statt globalem Flag
             if skip_own_sent and from_addr and from_addr == from_email.lower():
                 continue
 
@@ -135,7 +129,7 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
             to_header = decode_mime_words(message.get("to"))
             cc_header = decode_mime_words(message.get("cc"))
 
-            # Threading-Header extrahieren
+            # Extract threading headers
             message_id = message.get("message-id") or ""
             in_reply_to = message.get("in-reply-to") or ""
             references_raw = message.get("references") or ""
@@ -177,7 +171,7 @@ def imap_fetch_emails_for_range(username: str, password: str, from_email: str, d
 
 
 # ============================================================
-# IMAP Abruf fuer Kontakt-Materialsammlung
+# IMAP fetch for contact material collection
 # ============================================================
 def imap_fetch_for_contact(
     username: str, password: str, imap_server: str, imap_port: int,
@@ -187,16 +181,16 @@ def imap_fetch_for_contact(
     max_days: int = 360,
 ) -> list[dict]:
     """
-    Sammelt E-Mails zwischen contact_addr und user_email aus mehreren Ordnern.
+    Collects emails between contact_addr and user_email from multiple folders.
 
-    Pro Mail wird die Richtung bestimmt:
-      - 'incoming': contact_addr ist Sender, user_email in To/Cc
-      - 'outgoing': user_email ist Sender, contact_addr in To/Cc
+    For each mail the direction is determined:
+      - 'incoming': contact_addr is the sender
+      - 'outgoing': contact_addr appears in To/Cc
 
-    Sortierung: neueste zuerst. Text-Budget: sobald kumulierter Body
-    >= max_chars erreicht ist, wird abgebrochen.
+    Sorting: newest first. Text budget: collection stops once the cumulative
+    body text reaches >= max_chars.
 
-    Gibt Liste von dicts zurueck (gleiche Struktur wie imap_fetch_emails_for_range
+    Returns a list of dicts (same structure as imap_fetch_emails_for_range
     plus 'direction').
     """
     contact_low = contact_addr.strip().lower()
@@ -217,13 +211,13 @@ def imap_fetch_for_contact(
             try:
                 status, _ = mail.select(folder.strip(), readonly=True)
                 if status != "OK":
-                    log.debug("Ordner '%s' nicht selektierbar, uebersprungen.", folder)
+                    log.debug("Folder '%s' not selectable, skipped.", folder)
                     continue
             except Exception:
-                log.debug("Ordner '%s' nicht vorhanden, uebersprungen.", folder)
+                log.debug("Folder '%s' not found, skipped.", folder)
                 continue
 
-            # Zwei getrennte Suchen (OR wird von manchen Servern nicht korrekt unterstuetzt)
+            # Two separate searches (OR is not correctly supported by some servers)
             seen_uids = set()
             msg_ids = []
             for field in ("FROM", "TO"):
@@ -231,7 +225,7 @@ def imap_fetch_for_contact(
                 try:
                     status, data = mail.uid('search', None, query)
                 except Exception:
-                    log.debug("IMAP search %s in '%s' fehlgeschlagen.", field, folder)
+                    log.debug("IMAP search %s in '%s' failed.", field, folder)
                     continue
                 if status != "OK" or not data or not data[0]:
                     continue
@@ -259,9 +253,9 @@ def imap_fetch_for_contact(
                 to_header = decode_mime_words(message.get("to"))
                 cc_header = decode_mime_words(message.get("cc"))
 
-                # Richtung bestimmen: nur anhand From-Adresse
-                # (Cross-Check auf To/Cc entfaellt, da Mailbox-Adresse und
-                #  from_email unterschiedlich sein koennen, z.B. bei Weiterleitung)
+                # Determine direction: based on From address only
+                # (no cross-check on To/Cc because mailbox address and
+                #  from_email can differ, e.g. with forwarding)
                 direction = None
                 if from_addr == contact_low:
                     direction = "incoming"
@@ -301,10 +295,10 @@ def imap_fetch_for_contact(
         except Exception:
             pass
 
-    # Sortierung: neueste zuerst
+    # Sort: newest first
     raw_results.sort(key=lambda e: e.get("date", ""), reverse=True)
 
-    # Text-Budget anwenden
+    # Apply text budget
     result = []
     total_chars = 0
     for entry in raw_results:
@@ -317,18 +311,18 @@ def imap_fetch_for_contact(
 
 
 # ============================================================
-# IMAP Auto-Triage: Crash-sichere Nachbearbeitung
+# IMAP auto-triage: crash-safe post-processing
 # ============================================================
 def _check_keyword_support(mail) -> bool:
-    """Prueft ob die Mailbox benutzerdefinierte Keywords (Flags) unterstuetzt.
+    """Checks whether the mailbox supports custom keywords (flags).
 
-    PERMANENTFLAGS mit '\\*' bedeutet: Server erlaubt beliebige Keywords.
+    PERMANENTFLAGS containing '\\*' means the server allows arbitrary keywords.
 
-    imaplib speichert PERMANENTFLAGS als Teil der OK-Responses (nicht als
-    eigenen Key), daher muessen wir mail.response("OK") durchsuchen.
+    imaplib stores PERMANENTFLAGS as part of the OK responses (not as a
+    separate key), so we need to search through mail.response("OK").
     """
     try:
-        # PERMANENTFLAGS kommt als untagged OK response von SELECT:
+        # PERMANENTFLAGS arrives as an untagged OK response from SELECT:
         # * OK [PERMANENTFLAGS (\Answered \Flagged \Deleted \Seen \Draft \*)]
         resp = mail.response("OK")
         if resp and resp[1]:
@@ -345,24 +339,24 @@ def _check_keyword_support(mail) -> bool:
 
 
 def _inject_x_priority(raw_bytes: bytes, priority: int) -> bytes:
-    """Setzt X-Priority Header in einer rohen IMAP-Nachricht.
+    """Sets the X-Priority header in a raw IMAP message.
 
-    Ersetzt einen vorhandenen X-Priority Header oder fuegt einen neuen
-    vor dem Ende des Header-Blocks ein (vor \\r\\n\\r\\n).
+    Replaces an existing X-Priority header or inserts a new one
+    before the end of the header block (before \\r\\n\\r\\n).
     """
-    # Header-Ende finden
+    # Find end of headers
     header_end = raw_bytes.find(b"\r\n\r\n")
     sep = b"\r\n"
     if header_end < 0:
         header_end = raw_bytes.find(b"\n\n")
         sep = b"\n"
     if header_end < 0:
-        return raw_bytes  # Kein Header/Body-Separator gefunden
+        return raw_bytes  # No header/body separator found
 
     header_section = raw_bytes[:header_end]
     body_section = raw_bytes[header_end:]
 
-    # Vorhandenen X-Priority Header ersetzen
+    # Replace existing X-Priority header
     new_header, count = re.subn(
         rb"(?mi)^X-Priority:.*$",
         f"X-Priority: {priority}".encode(),
@@ -371,15 +365,15 @@ def _inject_x_priority(raw_bytes: bytes, priority: int) -> bytes:
     if count > 0:
         return new_header + body_section
 
-    # Kein vorhandener Header → neuen einfuegen
+    # No existing header found -- insert a new one
     x_prio = sep + f"X-Priority: {priority}".encode()
     return header_section + x_prio + body_section
 
 
 def _fetch_message_data(mail, uid_bytes):
-    """Holt rohe Nachricht, INTERNALDATE und FLAGS per UID FETCH.
+    """Fetches the raw message, INTERNALDATE, and FLAGS via UID FETCH.
 
-    Returns: (raw_bytes, internaldate_str, flags_list) oder (None, None, None).
+    Returns: (raw_bytes, internaldate_str, flags_list) or (None, None, None).
     """
     try:
         status, data = mail.uid('fetch', uid_bytes, '(BODY.PEEK[] INTERNALDATE FLAGS)')
@@ -401,53 +395,52 @@ def _fetch_message_data(mail, uid_bytes):
         if not raw_bytes:
             return None, None, None
 
-        # INTERNALDATE aus Metadaten extrahieren
-        # Wichtig: imaplib.Time2Internaldate() erwartet das volle IMAP-Format
-        # 'INTERNALDATE "DD-Mon-YYYY HH:MM:SS +ZZZZ"' (nicht nur den Datumswert).
+        # Extract INTERNALDATE from metadata
+        # Important: imaplib.Time2Internaldate() expects the full IMAP format
+        # 'INTERNALDATE "DD-Mon-YYYY..."' (not just the date value).
         internaldate = None
         m = re.search(r'INTERNALDATE "[^"]+"', meta_str)
         if m:
             internaldate = m.group(0)
 
-        # FLAGS extrahieren und filtern
+        # Extract and filter FLAGS
         original_flags = []
         m_flags = re.search(r'FLAGS \(([^)]*)\)', meta_str)
         if m_flags:
             for flag in m_flags.group(1).split():
-                # \Recent kann nicht gesetzt werden, \Deleted wollen wir nicht uebernehmen
+                # \Recent cannot be set, \Deleted should not be carried over
                 if flag not in ("\\Recent", "\\Deleted"):
                     original_flags.append(flag)
 
         return raw_bytes, internaldate, original_flags
     except Exception as e:
-        log.debug("FETCH fehlgeschlagen fuer UID %s: %s", uid_bytes, e)
+        log.debug("FETCH failed for UID %s: %s", uid_bytes, e)
         return None, None, None
 
 
 def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: int,
                    mailbox: str, sort_actions: list[dict]) -> dict:
     """
-    Crash-sichere IMAP-Nachbearbeitung in einer Session.
+    Crash-safe IMAP post-processing in a single session.
 
-    Jede Aktion durchlaeuft denselben Flow:
-      FETCH → X-Priority injizieren → APPEND (mit Original-Flags + extra_flags)
-      → verify → \\Deleted auf Original → Batch UID EXPUNGE (nur mit UIDPLUS).
+    Each action follows the same flow:
+      FETCH -> inject X-Priority -> APPEND (with original flags + extra_flags)
+      -> verify -> \\Deleted on original -> batch UID EXPUNGE (only with UIDPLUS).
 
     sort_actions: [{"uid": str, "folder": str, "priority": int,
                     "extra_flags": [str]}]
-      - folder: Zielordner (INBOX fuer in-place Ersetzung, Spam/Quarantine fuer Move)
-      - priority: X-Priority Wert (1-5) fuer den Header
-      - extra_flags: zusaetzliche Flags (z.B. ["\\\\Seen"], ["\\\\Flagged"])
+      - folder: target folder (INBOX for in-place replacement, Spam/Quarantine for move)
+      - priority: X-Priority value (1-5) for the header
+      - extra_flags: additional flags (e.g. ["\\\\Seen"], ["\\\\Flagged"])
 
-    Sicherheitsgarantien:
-    - Kein Email-Verlust: Original wird erst geloescht wenn Kopie verifiziert
-    - Crash-sicher: Abbruch → schlimmstenfalls Duplikat
-    - Idempotent: $Sentinel_Sorted verhindert Doppelverarbeitung
-    - Server-kompatibel: ohne UIDPLUS nur \\Deleted (kein EXPUNGE)
+    Safety guarantees:
+    - No email loss: original is only deleted after copy is verified
+    - Crash-safe: abort -> worst case is a duplicate
+    - Idempotent: $Sentinel_Sorted prevents double-processing
+    - Server-compatible: without UIDPLUS only \\Deleted (no EXPUNGE)
 
-    Gibt {"processed": int, "skipped": int, "failed": int,
-          "errors": [str], "keywords_supported": bool, "has_uidplus": bool}
-    zurueck.
+    Returns {"processed": int, "skipped": int, "failed": int,
+             "errors": [str], "keywords_supported": bool, "has_uidplus": bool}.
     """
     from email_report.config import SENTINEL_KEYWORD
 
@@ -461,7 +454,7 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
     try:
         mail.login(username, password)
 
-        # UIDPLUS-Faehigkeit pruefen (fuer sicheres UID EXPUNGE)
+        # Check UIDPLUS capability (required for safe UID EXPUNGE)
         has_uidplus = False
         try:
             caps = mail.capabilities or ()
@@ -470,17 +463,17 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
             pass
         result["has_uidplus"] = has_uidplus
 
-        # Quell-Mailbox read-write oeffnen
+        # Open source mailbox in read-write mode
         status, _ = mail.select(mailbox, readonly=False)
         if status != "OK":
-            result["errors"].append(f"Konnte Mailbox '{mailbox}' nicht oeffnen")
+            result["errors"].append(f"Could not open mailbox '{mailbox}'")
             return result
 
-        # PERMANENTFLAGS pruefen: Keywords supported?
+        # Check PERMANENTFLAGS: keywords supported?
         kw_supported = _check_keyword_support(mail)
         result["keywords_supported"] = kw_supported
 
-        # --- Phase 1: Zielordner erstellen (nur nicht-INBOX) ---
+        # --- Phase 1: Create target folders (non-INBOX only) ---
         created_folders = set()
         for action in sort_actions:
             folder_name = action.get("folder", "")
@@ -489,18 +482,18 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
             try:
                 status_c, _ = mail.create(folder_name)
                 if status_c == "OK":
-                    log.info("IMAP-Ordner erstellt: %s", folder_name)
+                    log.info("IMAP folder created: %s", folder_name)
             except Exception:
-                pass  # Ordner existiert vermutlich schon
+                pass  # Folder probably already exists
             try:
                 mail.subscribe(folder_name)
             except Exception:
                 pass
             created_folders.add(folder_name)
 
-        # --- Phase 2: Alle Actions verarbeiten ---
-        # FETCH → X-Priority → APPEND → verify → \Deleted auf Original
-        deleted_uids = []  # Fuer Batch-EXPUNGE am Ende
+        # --- Phase 2: Process all actions ---
+        # FETCH -> X-Priority -> APPEND -> verify -> \Deleted on original
+        deleted_uids = []  # For batch EXPUNGE at the end
 
         for action in sort_actions:
             uid = action.get("uid", "")
@@ -513,28 +506,28 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
             uid_b = uid.encode() if isinstance(uid, str) else uid
 
             try:
-                # FETCH rohe Nachricht + INTERNALDATE + FLAGS
+                # FETCH raw message + INTERNALDATE + FLAGS
                 raw_bytes, internaldate, orig_flags = _fetch_message_data(mail, uid_b)
                 if not raw_bytes:
                     result["failed"] += 1
-                    result["errors"].append(f"UID {uid}: FETCH fehlgeschlagen")
+                    result["errors"].append(f"UID {uid}: FETCH failed")
                     continue
 
-                # X-Priority Header setzen/ersetzen
+                # Set/replace X-Priority header
                 modified = _inject_x_priority(raw_bytes, priority)
 
-                # Flags zusammenbauen: Original + extra + $Sentinel_Sorted
+                # Build combined flags: original + extra + $Sentinel_Sorted
                 combined_flags = set(orig_flags)
                 for ef in extra_flags:
                     combined_flags.add(ef)
                 if kw_supported:
                     combined_flags.add(SENTINEL_KEYWORD)
-                # \Deleted nicht auf die neue Kopie
+                # Do not carry \Deleted over to the new copy
                 combined_flags.discard("\\Deleted")
                 combined_flags.discard("\\Recent")
                 flags_str = "(" + " ".join(sorted(combined_flags)) + ")"
 
-                # APPEND in Zielordner (mit kombinierten Flags + Original-Datum)
+                # APPEND to target folder (with combined flags + original date)
                 try:
                     status_a, _ = mail.append(
                         folder_name,
@@ -543,10 +536,10 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                         modified,
                     )
                 except ValueError:
-                    # Fallback: INTERNALDATE konnte nicht geparst werden
-                    # → ohne Datum appenden (Server nutzt aktuellen Zeitstempel)
-                    log.debug("INTERNALDATE-Parse fehlgeschlagen fuer UID %s, "
-                              "Fallback auf Server-Datum", uid)
+                    # Fallback: INTERNALDATE could not be parsed
+                    # -> append without date (server uses current timestamp)
+                    log.debug("INTERNALDATE parse failed for UID %s, "
+                              "falling back to server date", uid)
                     status_a, _ = mail.append(
                         folder_name,
                         flags_str,
@@ -555,11 +548,11 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
                     )
                 if status_a != "OK":
                     result["failed"] += 1
-                    result["errors"].append(f"UID {uid}: APPEND nach {folder_name} fehlgeschlagen")
+                    result["errors"].append(f"UID {uid}: APPEND to {folder_name} failed")
                     continue
 
-                # --- Kopie verifiziert, jetzt Original aufraumen ---
-                # \Deleted auf Original
+                # --- Copy verified, now clean up the original ---
+                # Mark original as \Deleted
                 try:
                     mail.uid('store', uid_b, '+FLAGS', '(\\Deleted)')
                     deleted_uids.append(uid)
@@ -571,24 +564,24 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
             except Exception as e:
                 result["failed"] += 1
                 result["errors"].append(f"UID {uid}: {e}")
-                log.warning("Sort-Fehler fuer UID %s nach %s: %s", uid, folder_name, e)
+                log.warning("Sort error for UID %s to %s: %s", uid, folder_name, e)
 
-        # --- Phase 3: Batch-EXPUNGE (nur mit UIDPLUS) ---
+        # --- Phase 3: Batch EXPUNGE (only with UIDPLUS) ---
         if deleted_uids and has_uidplus:
             uid_set = ",".join(deleted_uids)
             try:
                 mail.uid('expunge', uid_set)
             except Exception as e:
-                log.warning("UID EXPUNGE fehlgeschlagen (Originale bleiben als "
-                            "\\Deleted markiert): %s", e)
+                log.warning("UID EXPUNGE failed (originals remain marked as "
+                            "\\Deleted): %s", e)
         elif deleted_uids:
-            log.info("Server hat kein UIDPLUS – %d Originale als \\Deleted markiert "
-                     "(werden beim naechsten Ordner-Komprimieren entfernt).",
+            log.info("Server does not support UIDPLUS -- %d originals marked as \\Deleted "
+                     "(will be removed on next folder compaction).",
                      len(deleted_uids))
 
     except Exception as e:
-        result["errors"].append(f"IMAP-Verbindungsfehler: {e}")
-        log.warning("IMAP Auto-Triage Verbindungsfehler: %s", e)
+        result["errors"].append(f"IMAP connection error: {e}")
+        log.warning("IMAP auto-triage connection error: %s", e)
     finally:
         try:
             mail.logout()

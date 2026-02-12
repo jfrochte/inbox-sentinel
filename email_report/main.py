@@ -1,47 +1,47 @@
 """
-main.py – Orchestrierung (der Klebstoff zwischen allen Modulen).
+main.py -- Orchestration (the glue between all modules).
 
-Abhaengigkeiten innerhalb des Pakets:
-  - config (Config, Defaults, Debug-Flags)
-  - interactive (alle Benutzer-Prompts, Profil-Auswahl)
-  - utils (Dateihelfer, Logging, load_prompt_file)
-  - imap_client (E-Mail-Abruf, Auto-Triage)
-  - threading (Thread-Gruppierung per Union-Find)
-  - llm (LLM-Analyse, Validierung, Repair)
-  - report (Sortierung, HTML-Erzeugung, Block-Parsing)
-  - smtp_client (Versand)
-  - drafts (Auto-Draft: LLM-Antwortentwuerfe)
-  - contacts (Auto-Contacts: Sender-Wissensbank)
+Dependencies within the package:
+  - config (Config, defaults, debug flags)
+  - interactive (all user prompts, profile selection)
+  - utils (file helpers, logging, load_prompt_file)
+  - imap_client (email retrieval, auto-triage)
+  - threading (thread grouping via union-find)
+  - llm (LLM analysis, validation, repair)
+  - report (sorting, HTML generation, block parsing)
+  - smtp_client (sending)
+  - drafts (auto-draft: LLM reply drafts)
+  - contacts (auto-contacts: sender knowledge base)
 
-Dieser Modul enthaelt die main()-Funktion, die den gesamten Ablauf steuert:
-  1) Profil laden (optional)
-  2) Alle Parameter interaktiv abfragen
-  3) Profil speichern (optional)
-  4) IMAP: Mails holen, in Threads gruppieren
-  5) Pro Thread: Kontakt laden -> LLM-Analyse -> Auto-Draft -> Kontakt aktualisieren
-  6) Sortieren, HTML-Report generieren
-  7) Report per SMTP verschicken
-  8) Drafts in IMAP speichern (optional)
-  9) E-Mails in IMAP-Ordner sortieren (optional)
- 10) Temp-Dateien loeschen (ausser Debug)
+The main() function controls the entire workflow:
+  1) Load profile (optional)
+  2) Query all parameters interactively
+  3) Save profile (optional)
+  4) IMAP: fetch emails, group into threads
+  5) Per thread: load contact -> LLM analysis -> auto-draft -> update contact
+  6) Sort, generate HTML report
+  7) Send report via SMTP
+  8) Save drafts to IMAP (optional)
+  9) Sort emails into IMAP folders (optional)
+ 10) Delete temp files (unless debug mode)
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import argparse
 import os
 from collections import Counter
 from datetime import datetime, timedelta
 
-# tqdm ist optional: wenn installiert, gibt es Fortschrittsbalken.
+# tqdm is optional: if installed, a progress bar is displayed.
 try:
     from tqdm import tqdm
 except Exception:
     tqdm = None
 
 # ============================================================
-# Interne Paket-Imports
+# Internal package imports
 # ============================================================
 from email_report.config import Config, DEBUG_KEEP_FILES, DEBUG_LOG, REPORT_DIR, DEFAULT_SORT_FOLDERS
 from email_report.interactive import (
@@ -73,11 +73,11 @@ from email_report.contacts import (
 
 
 # ============================================================
-# CLI: Contact-Build Hilfsfunktionen
+# CLI: contact-build helpers
 # ============================================================
 def _build_single_contact(cfg, addr: str, contact_prompt_base: str) -> bool:
-    """Baut eine einzelne Kontakt-Card per IMAP-Materialsammlung + LLM.
-    Gibt True zurueck wenn erfolgreich."""
+    """Builds a single contact card via IMAP material collection + LLM.
+    Returns True on success."""
     folders = [cfg.mailbox]
     if cfg.sent_folder:
         folders.append(cfg.sent_folder)
@@ -88,9 +88,9 @@ def _build_single_contact(cfg, addr: str, contact_prompt_base: str) -> bool:
         folders=folders,
     )
     if not collected:
-        print(f"  Keine Mails gefunden fuer {addr}")
+        print(f"  No emails found for {addr}")
         return False
-    print(f"  {len(collected)} Mail(s) gesammelt fuer {addr}")
+    print(f"  {len(collected)} email(s) collected for {addr}")
     existing = load_contact(addr)
     card = build_contact_card(
         cfg.model, addr, cfg.name, cfg.ollama_url,
@@ -98,15 +98,15 @@ def _build_single_contact(cfg, addr: str, contact_prompt_base: str) -> bool:
     )
     if card:
         save_contact(addr, card)
-        print(f"  Card gespeichert: {addr}")
+        print(f"  Card saved: {addr}")
         return True
-    print(f"  Card-Build fehlgeschlagen fuer {addr}")
+    print(f"  Card build failed for {addr}")
     return False
 
 
 def _build_top_contacts(cfg, contact_prompt_base: str) -> None:
-    """Findet Top-10 Sender ohne Card und baut Cards."""
-    print("Sammle Sender-Frequenzen (letzte 90 Tage)...")
+    """Finds top-10 senders without a card and builds cards."""
+    print("Collecting sender frequencies (last 90 days)...")
     emails = imap_fetch_emails_for_range(
         username=cfg.username, password=cfg.password,
         from_email=cfg.from_email, days_back=90,
@@ -115,16 +115,15 @@ def _build_top_contacts(cfg, contact_prompt_base: str) -> None:
         skip_own_sent=True,
     )
     if not emails:
-        print("Keine E-Mails gefunden.")
+        print("No emails found.")
         return
 
     freq = Counter(e.get("from_addr", "").strip().lower() for e in emails)
     freq.pop("", None)
-    # Eigene Adresse entfernen
     if cfg.from_email:
         freq.pop(cfg.from_email.lower(), None)
 
-    # Top-10 ohne bestehende Card
+    # Top-10 without an existing card
     candidates = []
     for addr, count in freq.most_common(30):
         if load_contact(addr) is None:
@@ -133,50 +132,50 @@ def _build_top_contacts(cfg, contact_prompt_base: str) -> None:
             break
 
     if not candidates:
-        print("Alle Top-Sender haben bereits eine Card.")
+        print("All top senders already have a card.")
         return
 
-    print(f"{len(candidates)} Sender ohne Card gefunden:")
+    print(f"{len(candidates)} sender(s) without a card found:")
     for addr, count in candidates:
-        print(f"  {addr} ({count} Mails)")
+        print(f"  {addr} ({count} emails)")
 
     built = 0
     for addr, count in candidates:
-        print(f"\nBaue Card fuer {addr} ({count} Mails)...")
+        print(f"\nBuilding card for {addr} ({count} emails)...")
         if _build_single_contact(cfg, addr, contact_prompt_base):
             built += 1
 
-    print(f"\nFertig: {built}/{len(candidates)} Cards erstellt.")
+    print(f"\nDone: {built}/{len(candidates)} cards created.")
 
 
 # ============================================================
 # Main
 # ============================================================
 def main():
-    """Hauptablauf: siehe Modul-Docstring fuer Details."""
-    # --- CLI-Argumente ---
+    """Main workflow: see module docstring for details."""
+    # --- CLI arguments ---
     parser = argparse.ArgumentParser(
-        description="Inbox Sentinel – E-Mail-Report und Kontakt-Management",
+        description="Inbox Sentinel -- email report and contact management",
         add_help=False,
     )
     parser.add_argument("--build-contact", metavar="EMAIL",
-                        help="Kontakt-Card fuer eine einzelne Adresse bauen")
+                        help="Build a contact card for a single address")
     parser.add_argument("--build-contacts", action="store_true",
-                        help="Top-10 Sender ohne Card finden und Cards bauen")
+                        help="Find top-10 senders without a card and build cards")
     cli_args, _ = parser.parse_known_args()
 
-    # --- Profil laden ---
+    # --- Load profile ---
     cfg, profile_name = prompt_load_profile()
 
-    # CLI-Modus: Contact-Build
+    # CLI mode: contact build
     if cli_args.build_contact or cli_args.build_contacts:
         if cfg is None:
-            raise SystemExit("Bitte zuerst ein Profil anlegen.")
+            raise SystemExit("Please create a profile first.")
         cfg.password = prompt_secret_with_default("Passwort")
         try:
             contact_prompt_base = load_prompt_file("contact_prompt.txt")
         except FileNotFoundError:
-            raise SystemExit("contact_prompt.txt nicht gefunden.")
+            raise SystemExit("contact_prompt.txt not found.")
         if cli_args.build_contact:
             _build_single_contact(cfg, cli_args.build_contact, contact_prompt_base)
         else:
@@ -185,15 +184,15 @@ def main():
 
     edited = False
     if cfg is not None:
-        # Flow A: Profil vorhanden -> Schnellstart
+        # Flow A: profile exists -> quick start
         cfg, edited = prompt_confirm_or_edit(cfg)
     else:
-        # Flow B: Kein Profil -> Geführte Einrichtung
+        # Flow B: no profile -> guided setup
         edited = True
         cfg = Config()
         org = prompt_organization()
         if org is not None:
-            # Org-Preset anwenden, dann nur User-Settings fragen
+            # Apply org preset, then only ask for user settings
             cfg.organization = org["key"]
             cfg.imap_server = org["imap_server"]
             cfg.imap_port = org["imap_port"]
@@ -202,50 +201,48 @@ def main():
             cfg.smtp_ssl = org["smtp_ssl"]
             cfg = prompt_user_settings(cfg)
         else:
-            # Eigener Server: voller Dialog wie bisher
+            # Custom server: full dialog as before
             cfg = prompt_all_settings(cfg)
 
-    # --- Prompt-Datei laden ---
+    # --- Load prompt file ---
     try:
         prompt_base = load_prompt_file(cfg.prompt_file)
     except FileNotFoundError:
-        raise SystemExit(f"Prompt-Datei nicht gefunden: {cfg.prompt_file}")
+        raise SystemExit(f"Prompt file not found: {cfg.prompt_file}")
 
-    # --- Draft-Prompt laden (wenn auto_draft aktiv) ---
+    # --- Load draft prompt (if auto_draft is enabled) ---
     draft_prompt_base = None
     if cfg.auto_draft:
         try:
             draft_prompt_base = load_prompt_file("draft_prompt.txt")
         except FileNotFoundError:
-            log.warning("draft_prompt.txt nicht gefunden - Auto-Draft deaktiviert.")
+            log.warning("draft_prompt.txt not found - auto-draft disabled.")
             cfg.auto_draft = False
 
-    # --- Contact-Prompt laden (wenn auto_contacts_lazy aktiv) ---
+    # --- Load contact prompt (if auto_contacts_lazy is enabled) ---
     contact_prompt_base = None
     if cfg.auto_contacts_lazy:
         try:
             contact_prompt_base = load_prompt_file("contact_prompt.txt")
         except FileNotFoundError:
-            log.warning("contact_prompt.txt nicht gefunden - Auto-Contacts deaktiviert.")
+            log.warning("contact_prompt.txt not found - auto-contacts disabled.")
             cfg.auto_contacts_lazy = False
 
-    # --- Profil speichern (nur wenn etwas geaendert wurde) ---
+    # --- Save profile (only if something changed) ---
     if edited:
         prompt_save_profile(cfg, default_name=profile_name)
 
-    print("\nKonfiguration (Achtung für Passwort KEIN Default):\n")
+    print("\nConfiguration (note: no default for password):\n")
 
-    # Passwort
+    # Password
     cfg.password = prompt_secret_with_default("Passwort")
 
-    # Punkt 7: kleine Plausibilitaetswarnung
-    # Viele Server erwarten, dass from_email in irgendeiner Form zur Auth passt.
+    # Many servers require from_email to match the authenticated username.
     if "@" in cfg.username and cfg.from_email.lower() != cfg.username.lower():
-        log.info("Hinweis: From E-Mail (%s) ist ungleich Username (%s). "
-                 "Je nach SMTP-Policy kann das Probleme machen.", cfg.from_email, cfg.username)
+        log.info("Note: from_email (%s) differs from username (%s). "
+                 "Depending on SMTP policy this may cause issues.", cfg.from_email, cfg.username)
 
-    # --- IMAP: E-Mails holen ---
-    # skip_own_sent wird jetzt explizit uebergeben statt als globales Flag
+    # --- IMAP: fetch emails ---
     emails = imap_fetch_emails_for_range(
         username=cfg.username,
         password=cfg.password,
@@ -258,14 +255,14 @@ def main():
         skip_own_sent=cfg.skip_own_sent,
     )
     if not emails:
-        print("Keine E-Mails im gewaehlten Zeitraum gefunden.")
+        print("No emails found in the selected period.")
         return
 
     total_emails = len(emails)
     threads = group_into_threads(emails)
-    log.info("Threading: %d E-Mails -> %d Threads", total_emails, len(threads))
+    log.info("Threading: %d emails -> %d threads", total_emails, len(threads))
 
-    # --- Report-Dateien vorbereiten ---
+    # --- Prepare report files ---
     start_day = (datetime.now() - timedelta(days=cfg.days_back)).date()
     end_day = datetime.now().date()
     report_range = f"{start_day.isoformat()}_bis_{end_day.isoformat()}"
@@ -281,35 +278,35 @@ def main():
     debug_file = None
     if debug_log:
         debug_file = os.path.join(report_dir, f"debug_{report_range}.jsonl")
-        print(f"Debug aktiv: schreibe {debug_file}")
+        print(f"Debug active: writing {debug_file}")
         write_jsonl(debug_file, {"run_start": datetime.now().isoformat(timespec="seconds"), "ollama_url": cfg.ollama_url, "model": cfg.model})
 
-    # Bei Nicht-Debug: vorhandene Dateien dieses Tages entfernen
+    # Non-debug mode: remove existing files for this day
     if not debug_keep:
         safe_remove(summaries_file)
         safe_remove(sorted_file)
 
     iterator = threads
     if tqdm is not None:
-        iterator = tqdm(threads, desc="Verarbeite Threads")
+        iterator = tqdm(threads, desc="Processing threads")
 
-    sort_actions = []  # Sammelt {"uid", "folder", "priority", "extra_flags"} fuer Auto-Triage
-    draft_queue = []  # Sammelt (subject_log, Message) fuer IMAP APPEND
+    sort_actions = []  # Collects {"uid", "folder", "priority", "extra_flags"} for auto-triage
+    draft_queue = []  # Collects (subject_log, Message) for IMAP APPEND
     draft_stats = {"generated": 0, "skipped": 0, "failed": 0}
 
-    # --- Verarbeitung: pro Thread LLM Summary erzeugen ---
+    # --- Processing: generate LLM summary per thread ---
     for idx_thread, thread in enumerate(iterator, start=1):
         newest = thread[-1]
         thread_uids = [e.get("uid") for e in thread if e.get("uid")]
 
-        # --- Punkt A: Kontakt laden (vor LLM-Analyse, immer wenn Card existiert) ---
+        # --- Load contact (before LLM analysis, whenever a card exists) ---
         sender_context = ""
         sender_addr = (newest.get("from_addr") or "").strip().lower()
         is_self = bool(cfg.from_email and cfg.from_email.lower() == sender_addr)
         if sender_addr and not is_self:
             existing_contact = load_contact(sender_addr)
             if existing_contact is None and cfg.auto_contacts_lazy and contact_prompt_base:
-                # Lazy-Build: Card existiert noch nicht, Material sammeln und bauen
+                # Lazy build: card does not exist yet, collect material and build
                 try:
                     folders = [cfg.mailbox]
                     if cfg.sent_folder:
@@ -328,9 +325,9 @@ def main():
                         if card:
                             save_contact(sender_addr, card)
                             existing_contact = card
-                            log.info("Lazy-Build: Kontakt-Card erstellt fuer %s", sender_addr)
+                            log.info("Lazy build: contact card created for %s", sender_addr)
                 except Exception as e:
-                    log.debug("Lazy-Build fehlgeschlagen fuer %s: %s", sender_addr, e)
+                    log.debug("Lazy build failed for %s: %s", sender_addr, e)
             sender_context = format_contact_for_prompt(existing_contact)
 
         dbg = None
@@ -350,7 +347,7 @@ def main():
                 'sender_addr': sender_addr,
             }
 
-        # --- Punkt B: sender_context an LLM-Analyse uebergeben ---
+        # --- Pass sender_context to LLM analysis ---
         final_block = _analyze_thread_guaranteed(cfg.model, thread, cfg.name, cfg.ollama_url, prompt_base, roles=cfg.roles, person_email=cfg.from_email, debug=dbg, sender_context=sender_context)
 
         if debug_log and debug_file and dbg is not None:
@@ -358,13 +355,13 @@ def main():
             keys = st0.get('json_keys') or []
             if dbg.get('final_status') == 'FALLBACK' and dbg.get('fallback_reason') == 'leere Antwort':
                 if 'choices' in keys or 'message' in keys:
-                    dbg['hint'] = 'Server liefert kein Feld "response" (sondern z.B. message/choices). Der Parser liest das jetzt; falls weiterhin leer: resp_text_head pruefen.'
+                    dbg['hint'] = 'Server returns no "response" field (e.g. message/choices instead). The parser handles this now; if still empty: check resp_text_head.'
             write_jsonl(debug_file, dbg)
 
-        # parsed_block einmalig berechnen (wird von auto_triage UND auto_draft genutzt)
+        # Compute parsed_block once (used by both auto_triage and auto_draft)
         parsed_block = _parse_llm_summary_block(final_block)
 
-        # --- Auto-Triage: Einheitliche Actions-Liste ---
+        # --- Auto-triage: unified actions list ---
         if cfg.auto_triage and thread_uids:
             cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
             prio = 3
@@ -374,22 +371,22 @@ def main():
                 pass
 
             if cat in DEFAULT_SORT_FOLDERS:
-                # SPAM/PHISHING → in Quarantaene-Ordner (mit X-Priority + \Seen)
+                # SPAM/PHISHING -> move to quarantine folder (with X-Priority + \Seen)
                 for uid in thread_uids:
                     sort_actions.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat],
                                          "priority": prio, "extra_flags": ["\\Seen"]})
             elif cat == "FYI":
-                # FYI → in INBOX ersetzen (nur X-Priority, keine Flag-Aenderung)
+                # FYI -> replace in INBOX (X-Priority only, no flag change)
                 for uid in thread_uids:
                     sort_actions.append({"uid": uid, "folder": cfg.mailbox,
                                          "priority": prio, "extra_flags": []})
             elif cat == "ACTIONABLE" and prio <= 2:
-                # Hohe Prioritaet → in INBOX ersetzen (X-Priority + \Flagged)
+                # High priority -> replace in INBOX (X-Priority + \Flagged)
                 for uid in thread_uids:
                     sort_actions.append({"uid": uid, "folder": cfg.mailbox,
                                          "priority": prio, "extra_flags": ["\\Flagged"]})
             elif cat == "ACTIONABLE":
-                # Normale/niedrige Prioritaet → in INBOX ersetzen (nur X-Priority)
+                # Normal/low priority -> replace in INBOX (X-Priority only)
                 for uid in thread_uids:
                     sort_actions.append({"uid": uid, "folder": cfg.mailbox,
                                          "priority": prio, "extra_flags": []})
@@ -402,7 +399,7 @@ def main():
             newest_from = (newest.get("from") or "").lower()
             is_self_sent = bool(cfg.from_email and cfg.from_email.lower() in newest_from)
 
-            # Skip-Bedingungen: nicht-ACTIONABLE, self-sent, keine echten Actions
+            # Skip conditions: non-ACTIONABLE, self-sent, no real actions
             if cat in ("SPAM", "PHISHING", "FYI"):
                 draft_stats["skipped"] += 1
             elif is_self_sent:
@@ -411,7 +408,7 @@ def main():
                 draft_stats["skipped"] += 1
             else:
                 try:
-                    # --- Punkt C: sender_context an Draft uebergeben ---
+                    # --- Pass sender_context to draft generation ---
                     draft_text = generate_draft_text(
                         cfg.model, thread, cfg.name, cfg.ollama_url,
                         draft_prompt_base, parsed_block, roles=cfg.roles,
@@ -426,27 +423,27 @@ def main():
                         final_block += "\nDraft-Status: erstellt\n"
                     else:
                         draft_stats["failed"] += 1
-                        log.warning("Draft-LLM lieferte leeren Text fuer: %s",
+                        log.warning("Draft LLM returned empty text for: %s",
                                     (newest.get("subject") or "?")[:80])
                 except Exception as e:
                     draft_stats["failed"] += 1
-                    log.warning("Draft-Fehler fuer '%s': %s",
+                    log.warning("Draft error for '%s': %s",
                                 (newest.get("subject") or "?")[:80], e)
 
         append_secure(summaries_file, final_block)
         append_secure(summaries_file, f"\n\n{BLOCK_SEPARATOR}\n\n")
 
-    # --- Sortieren nach Priority ---
+    # --- Sort by priority ---
     sort_summaries_by_priority(summaries_file, sorted_file)
 
-    # --- HTML Body bauen ---
+    # --- Build HTML body ---
     with open(sorted_file, "r", encoding="utf-8") as f:
         sorted_text = f.read()
 
     subject = f"Daily Email Report ({start_day.isoformat()} bis {end_day.isoformat()})"
     html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(threads), auto_triage=cfg.auto_triage, total_emails=total_emails, draft_stats=draft_stats if cfg.auto_draft else None)
 
-    # --- Versenden ---
+    # --- Send report ---
     sent_ok = False
     try:
         send_email_html(
@@ -463,9 +460,9 @@ def main():
         )
         sent_ok = True
     finally:
-        # --- Auto-Draft: Drafts in IMAP speichern (VOR Auto-Triage) ---
+        # --- Auto-draft: save drafts to IMAP (BEFORE auto-triage) ---
         if sent_ok and cfg.auto_draft and draft_queue:
-            log.info("Auto-Draft: %d Entwurf/Entwuerfe zum Speichern.", len(draft_queue))
+            log.info("Auto-draft: %d draft(s) to save.", len(draft_queue))
             try:
                 draft_result = imap_save_drafts(
                     username=cfg.username,
@@ -475,17 +472,17 @@ def main():
                     drafts_folder=cfg.drafts_folder,
                     draft_messages=draft_queue,
                 )
-                log.info("Auto-Draft Ergebnis: %d gespeichert, %d fehlgeschlagen.",
+                log.info("Auto-draft result: %d saved, %d failed.",
                          draft_result["saved"], draft_result["failed"])
                 if draft_result["errors"]:
                     for err in draft_result["errors"]:
-                        log.warning("Auto-Draft Fehler: %s", err)
+                        log.warning("Auto-draft error: %s", err)
             except Exception as e:
-                log.warning("Auto-Draft fehlgeschlagen: %s", e)
+                log.warning("Auto-draft failed: %s", e)
 
-        # --- Auto-Triage: NACH dem Versand (Report hat Vorrang) ---
+        # --- Auto-triage: AFTER sending (report has priority) ---
         if sent_ok and cfg.auto_triage and sort_actions:
-            log.info("Auto-Triage: %d E-Mail(s) zu verarbeiten.", len(sort_actions))
+            log.info("Auto-triage: %d email(s) to process.", len(sort_actions))
             try:
                 sort_result = imap_safe_sort(
                     username=cfg.username,
@@ -495,20 +492,20 @@ def main():
                     mailbox=cfg.mailbox,
                     sort_actions=sort_actions,
                 )
-                log.info("Auto-Triage Ergebnis: %d verarbeitet, "
-                         "%d uebersprungen, %d fehlgeschlagen.",
+                log.info("Auto-triage result: %d processed, "
+                         "%d skipped, %d failed.",
                          sort_result["processed"],
                          sort_result["skipped"], sort_result["failed"])
                 if not sort_result["keywords_supported"]:
-                    log.warning("Auto-Triage: Server unterstuetzt keine Keywords – "
-                                "Idempotenz nicht moeglich.")
+                    log.warning("Auto-triage: server does not support keywords -- "
+                                "idempotency not possible.")
                 if sort_result["errors"]:
                     for err in sort_result["errors"]:
-                        log.warning("Auto-Triage Fehler: %s", err)
+                        log.warning("Auto-triage error: %s", err)
             except Exception as e:
-                log.warning("Auto-Triage fehlgeschlagen: %s", e)
+                log.warning("Auto-triage failed: %s", e)
 
-        # Nach erfolgreichem Versand: Dateien loeschen, ausser Debug
+        # After successful send: delete files unless debug mode
         if sent_ok and (not debug_keep):
             safe_remove(summaries_file)
             safe_remove(sorted_file)

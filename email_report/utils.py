@@ -1,13 +1,12 @@
 """
-utils.py – Hilfsfunktionen fuer Dateioperationen, Logging und Textverarbeitung.
+utils.py -- Utility functions for file operations, logging, and text processing.
 
-Dieses Modul ist ein Blattmodul ohne interne Paket-Abhaengigkeiten.
-Es stellt grundlegende Werkzeuge bereit, die von mehreren anderen Modulen
-des Pakets genutzt werden.
+Leaf module with no internal package dependencies.
+Provides basic tools used by multiple other modules in the package.
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import os
 import json
@@ -15,10 +14,10 @@ import logging
 
 
 # ============================================================
-# Logging (Punkt 8: weniger "Fehler schlucken" -> nachvollziehbar)
+# Logging
 # ============================================================
-# Ziel: Im Normalbetrieb nicht zu laut.
-# Wenn du mehr sehen willst: setze ENV EMAIL_REPORT_LOGLEVEL=DEBUG
+# Goal: not too noisy in normal operation.
+# Set ENV EMAIL_REPORT_LOGLEVEL=DEBUG for more output.
 LOGLEVEL = os.environ.get("EMAIL_REPORT_LOGLEVEL", "INFO").upper().strip()
 logging.basicConfig(level=getattr(logging, LOGLEVEL, logging.INFO),
                     format="%(asctime)s %(levelname)s %(message)s")
@@ -26,13 +25,10 @@ log = logging.getLogger("email_report")
 
 
 # ============================================================
-# Hilfsfunktionen: sichere Dateibehandlung (mit Logging)
+# Helper functions: safe file handling (with logging)
 # ============================================================
 def safe_remove(path: str) -> None:
-    """
-    Loescht Datei, falls vorhanden.
-    Punkt 8: Nicht komplett still sein. Wir loggen bei DEBUG.
-    """
+    """Deletes file if it exists."""
     try:
         os.remove(path)
         log.debug("Removed file: %s", path)
@@ -43,10 +39,7 @@ def safe_remove(path: str) -> None:
 
 
 def ensure_mode_0600(path: str) -> None:
-    """
-    Setzt best effort Dateirechte auf 0600.
-    Unter Windows oder manchen Mounts kann das wirkungslos sein.
-    """
+    """Best-effort chmod to 0600. May be ineffective on Windows or some mounts."""
     try:
         os.chmod(path, 0o600)
     except Exception as e:
@@ -54,9 +47,7 @@ def ensure_mode_0600(path: str) -> None:
 
 
 def append_secure(path: str, text: str) -> None:
-    """
-    Haengt Text an Datei an, best effort 0600.
-    """
+    """Appends text to file, best effort 0600."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
     try:
         with os.fdopen(fd, "a", encoding="utf-8") as f:
@@ -66,7 +57,7 @@ def append_secure(path: str, text: str) -> None:
 
 
 def write_jsonl(path: str, obj: dict) -> None:
-    """Schreibt ein JSON-Objekt als eine Zeile (jsonl)."""
+    """Writes a JSON object as a single line (JSONL)."""
     try:
         line = json.dumps(obj, ensure_ascii=False)
     except Exception:
@@ -76,9 +67,7 @@ def write_jsonl(path: str, obj: dict) -> None:
 
 
 def write_secure(path: str, text: str) -> None:
-    """
-    Ueberschreibt Datei, best effort 0600.
-    """
+    """Overwrites file, best effort 0600."""
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
@@ -89,10 +78,10 @@ def write_secure(path: str, text: str) -> None:
 
 def load_prompt_file(path: str) -> str:
     """
-    Laedt einen Prompt aus einer Textdatei.
+    Loads a prompt from a text file.
     - UTF-8
-    - Entfernt ein evtl. UTF-8 BOM
-    - Stellt sicher, dass der Prompt mit einem Newline endet
+    - Strips a potential UTF-8 BOM
+    - Ensures the prompt ends with a newline
     """
     with open(path, "r", encoding="utf-8-sig") as f:
         txt = f.read()
@@ -103,12 +92,9 @@ def load_prompt_file(path: str) -> str:
     return txt
 
 
-# ============================================================
-# Bug Fix: _tail_text war in der monolithischen Version aufgerufen
-# (Zeile 953) aber nie definiert. Hier die korrekte Implementierung.
-# ============================================================
+
 def _tail_text(text: str, limit: int = 6000) -> str:
-    """Gibt die letzten `limit` Zeichen von text zurueck."""
+    """Returns the last `limit` characters of text."""
     if len(text) <= limit:
         return text
     return text[-limit:]

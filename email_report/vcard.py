@@ -1,8 +1,8 @@
 """
-vcard.py -- vCard 3.0 Reader/Writer fuer Kontakt-Dateien.
+vcard.py -- vCard 3.0 reader/writer for contact files.
 
-Blattmodul ohne Paket-Abhaengigkeiten (nur stdlib).
-Unterstuetzt die Felder die inbox-sentinel braucht:
+Leaf module with no package dependencies (only stdlib).
+Supports the fields used by inbox-sentinel:
 FN, N, NICKNAME, EMAIL, TEL, ADR, ORG, TITLE, ROLE, URL,
 NOTE, BDAY, UID, REV, PRODID, CATEGORIES, TZ, GEO, SORT-STRING.
 
@@ -10,18 +10,18 @@ vCard 3.0 Spec: RFC 2426
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import re
 
 # ============================================================
-# Interne Paket-Imports
+# Internal package imports
 # ============================================================
 from email_report.utils import write_secure
 
 
 # ============================================================
-# Konstanten
+# Constants
 # ============================================================
 _MULTI_VALUE_PROPS = frozenset({"TEL"})
 _FOLD_LIMIT = 75
@@ -89,7 +89,7 @@ def _fold_line(line: str) -> str:
     parts = []
     while len(encoded) > _FOLD_LIMIT:
         cut = _FOLD_LIMIT
-        # Nicht mitten in einem UTF-8 Multi-Byte-Zeichen schneiden
+        # Don't cut in the middle of a UTF-8 multi-byte character
         while cut > 0 and (encoded[cut] & 0xC0) == 0x80:
             cut -= 1
         parts.append(encoded[:cut].decode('utf-8'))
@@ -100,12 +100,12 @@ def _fold_line(line: str) -> str:
 
 
 # ============================================================
-# N-Feld Parsing / Serializing
+# N field parsing / serializing
 # ============================================================
 def _parse_n_field(value: str) -> dict:
     """Parse N:Family;Given;Additional;Prefix;Suffix -> dict."""
-    # Beachte: Semikolons in N sind structural, nicht escaped
-    # Aber escaped semicolons muessen beruecksichtigt werden
+    # Note: semicolons in N are structural, not escaped.
+    # But escaped semicolons must be considered.
     parts = _split_structured(value, 5)
     return {
         "family": parts[0],
@@ -160,10 +160,7 @@ _PROP_RE = re.compile(r'^([A-Za-z0-9-]+)(?:;([^:]*))?\s*:\s*(.*)')
 
 
 def read_vcard(filepath: str) -> dict | None:
-    """
-    Liest eine vCard-Datei und gibt ein dict zurueck.
-    Gibt None zurueck wenn die Datei nicht existiert oder ungueltig ist.
-    """
+    """Reads a vCard file and returns a dict. Returns None if the file doesn't exist or is invalid."""
     import os
     if not os.path.isfile(filepath):
         return None
@@ -201,13 +198,13 @@ def read_vcard(filepath: str) -> dict | None:
             continue
 
         prop_name = m.group(1).upper()
-        # params = m.group(2)  # z.B. "TYPE=WORK" — aktuell nicht genutzt
+        # params = m.group(2)  # e.g. "TYPE=WORK" -- currently unused
         raw_value = m.group(3)
 
         if prop_name == "N":
             data["N"] = _parse_n_field(raw_value)
         elif prop_name == "CATEGORIES":
-            # Kommas sind Trennzeichen in CATEGORIES, nicht escapen
+            # Commas are separators in CATEGORIES, don't escape
             data["CATEGORIES"] = raw_value
         elif prop_name in _MULTI_VALUE_PROPS:
             data.setdefault(prop_name, [])
@@ -229,12 +226,12 @@ def read_vcard(filepath: str) -> dict | None:
 # Writer
 # ============================================================
 def write_vcard(filepath: str, data: dict) -> None:
-    """Schreibt ein vCard-dict als .vcf Datei (0o600 Permissions)."""
+    """Writes a vCard dict as a .vcf file (0o600 permissions)."""
     lines: list[str] = []
     lines.append("BEGIN:VCARD")
     lines.append("VERSION:3.0")
 
-    # Reihenfolge gemaess vCard-Konvention
+    # Order according to vCard convention
     if data.get("PRODID"):
         lines.append(_fold_line(f"PRODID:{_escape(data['PRODID'])}"))
     if data.get("UID"):
@@ -279,7 +276,7 @@ def write_vcard(filepath: str, data: dict) -> None:
         lines.append(_fold_line(f"BDAY:{_escape(data['BDAY'])}"))
 
     if data.get("CATEGORIES"):
-        # CATEGORIES: Kommas sind Trennzeichen (nicht escapen)
+        # CATEGORIES: commas are separators (don't escape)
         lines.append(_fold_line(f"CATEGORIES:{data['CATEGORIES']}"))
     if data.get("TZ"):
         lines.append(_fold_line(f"TZ:{_escape(data['TZ'])}"))

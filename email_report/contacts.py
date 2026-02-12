@@ -1,21 +1,21 @@
 """
-contacts.py -- Kontakt-Wissensbasis: pro E-Mail-Adresse eine vCard 3.0 Datei.
+contacts.py -- Contact knowledge base: one vCard 3.0 file per email address.
 
-Abhaengigkeiten innerhalb des Pakets:
+Dependencies within the package:
   - utils (log)
   - vcard (read_vcard, write_vcard)
 
-Dieses Modul ist ein Blattmodul. Es wird nur von main.py importiert.
-Kontakt-Dateien liegen in contacts/ (eine .vcf pro Adresse).
+Leaf module, only imported by main.py.
+Contact files are stored in contacts/ (one .vcf per address).
 
-Hauptfunktionen:
-  - load_contact / save_contact: vCard laden/speichern
-  - format_contact_for_prompt: Kontakt als Prompt-Fragment
-  - build_contact_card: IMAP-Material -> regelbasiert + LLM -> vCard-dict
+Main functions:
+  - load_contact / save_contact: load/save vCard
+  - format_contact_for_prompt: format contact as prompt fragment
+  - build_contact_card: IMAP material -> rule-based + LLM -> vCard dict
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import copy
 import os
@@ -26,26 +26,26 @@ from datetime import datetime, timezone
 import requests
 
 # ============================================================
-# Interne Paket-Imports
+# Internal package imports
 # ============================================================
 from email_report.utils import log
 from email_report.vcard import read_vcard, write_vcard
 
 
 # ============================================================
-# Konstanten
+# Constants
 # ============================================================
 _CONTACTS_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "contacts")
 
 _PRODID = "-//Inbox Sentinel//EN"
 
-# Werte die beim Merge ignoriert werden (LLM-Platzhalter fuer "weiss nicht")
+# Values ignored during merge (LLM placeholders for "unknown")
 _SKIP_VALUES = frozenset({
     "nicht bestimmbar", "nicht beurteilbar", "unbekannt",
     "keine neuen informationen", "n/a", "-", "\u2014", "",
 })
 
-# Regex fuer Telefonnummern in Signaturen
+# Regex for phone numbers in signatures
 _TEL_LINE_RE = re.compile(
     r"(?:Tel\.?|Fon|Phone|Mobil|Fax|Telefon|Handy)\s*[:.]?\s*"
     r"([\+\d][\d\s/\-().]{6,})",
@@ -53,21 +53,21 @@ _TEL_LINE_RE = re.compile(
 )
 _TEL_INTL_RE = re.compile(r"\+\d[\d\s/\-().]{7,}")
 
-# Regex fuer URLs in Signaturen (keine mailto:, keine Tracking-Pixel)
+# Regex for URLs in signatures (no mailto:, no tracking pixels)
 _SIG_URL_RE = re.compile(r"https?://[^\s<>\"')\]]+")
 _TRACKING_URL_RE = re.compile(r"(?i)(?:track|pixel|click|open|beacon|unsubscribe|list-unsubscribe)")
 
 
 # ============================================================
-# Hilfsfunktionen
+# Helper functions
 # ============================================================
 def _email_to_filename(email_addr: str) -> str:
-    """Wandelt eine E-Mail-Adresse in einen Dateinamen um."""
+    """Converts an email address to a filename."""
     return email_addr.strip().lower().replace("@", "_") + ".vcf"
 
 
 def _clean_display_name(raw: str) -> str:
-    """Extrahiert sauberen Namen aus IMAP-Header-Format wie '"Mustermann, Max" <max@...>'."""
+    """Extracts a clean name from IMAP header format like '"Mustermann, Max" <max@...>'."""
     if not raw:
         return ""
     m = re.match(r'"?([^"<]+)"?\s*<', raw)
@@ -77,15 +77,15 @@ def _clean_display_name(raw: str) -> str:
 
 
 def _ensure_contacts_dir() -> str:
-    """Erstellt das Kontaktverzeichnis falls noetig und gibt den Pfad zurueck."""
+    """Creates the contacts directory if needed and returns the path."""
     os.makedirs(_CONTACTS_DIR, exist_ok=True)
     return _CONTACTS_DIR
 
 
 def _split_name(display_name: str) -> dict:
     """
-    Heuristik: Display-Name in family/given splitten.
-    Erkennt 'Nachname, Vorname' und 'Vorname Nachname'.
+    Heuristic: split display name into family/given.
+    Recognizes 'Last, First' and 'First Last' patterns.
     """
     name = display_name.strip()
     if not name:
@@ -104,17 +104,17 @@ def _split_name(display_name: str) -> dict:
 
 
 def _is_skip_value(val: str) -> bool:
-    """Prueft ob ein Wert ein LLM-Platzhalter ist und ignoriert werden soll."""
+    """Checks whether a value is an LLM placeholder that should be ignored."""
     return (val or "").strip().lower().rstrip(".") in _SKIP_VALUES
 
 
-# Gaengige Telefonnummer-Formate (nach Bereinigung):
-#   +49 234 777 27 121    (international mit Leerzeichen)
-#   +49-234-777-27-121    (international mit Bindestrichen)
-#   +49 (0) 234 777 27121 (international mit Null-Klammer)
+# Common phone number formats (after sanitization):
+#   +49 234 777 27 121    (international with spaces)
+#   +49-234-777-27-121    (international with hyphens)
+#   +49 (0) 234 777 27121 (international with zero-bracket)
 #   0234 777 27 121       (national)
-#   0234/77727121         (national mit Slash)
-# Minimum 7 Ziffern, Maximum 15 (ITU-T E.164).
+#   0234/77727121         (national with slash)
+# Minimum 7 digits, maximum 15 (ITU-T E.164).
 _TEL_VALID_RE = re.compile(
     r"^\+?\d[\d\s/\-()]{5,}$"
 )
@@ -122,25 +122,25 @@ _TEL_VALID_RE = re.compile(
 
 def _sanitize_tel(raw: str) -> str:
     """
-    Bereinigt eine Telefonnummer:
-    - Trailing/Leading Muell entfernen (Klammern, Punkte, Kommas, Semikolons)
-    - Unbalancierte Klammern reparieren oder entfernen
-    - Validierung: 7-15 Ziffern, nur erlaubte Zeichen
-    Gibt leeren String zurueck wenn nicht reparierbar.
+    Sanitizes a phone number:
+    - Strip trailing/leading junk (brackets, dots, commas, semicolons)
+    - Repair or remove unbalanced parentheses
+    - Validate: 7-15 digits, only allowed characters
+    Returns empty string if not repairable.
     """
     s = raw.strip()
     if not s:
         return ""
 
-    # Trailing Muell abschneiden (alles was nicht Ziffer/Klammer-zu ist)
+    # Strip trailing junk (anything that's not a digit or closing bracket)
     s = re.sub(r'[.,;:\s]+$', '', s)
-    # Trailing offene Klammer (z.B. "...121 (")
+    # Trailing open bracket (e.g. "...121 (")
     s = re.sub(r'\s*\(\s*$', '', s)
-    # Leading Muell (alles vor + oder erster Ziffer)
+    # Leading junk (everything before + or first digit)
     s = re.sub(r'^[^+\d]+', '', s)
 
-    # Klammern balancieren: nur "(0)" oder "(0xx)" Muster behalten
-    # Alles andere: Klammern entfernen
+    # Balance parentheses: only keep "(0)" or "(0xx)" patterns
+    # Everything else: remove brackets
     balanced = []
     i = 0
     while i < len(s):
@@ -148,22 +148,22 @@ def _sanitize_tel(raw: str) -> str:
             close = s.find(')', i)
             if close > i:
                 inner = s[i+1:close]
-                # Nur behalten wenn Inhalt wie (0) oder (0234) aussieht
+                # Only keep if content looks like (0) or (0234)
                 if re.match(r'^0\d{0,4}$', inner.strip()):
                     balanced.append(s[i:close+1])
                     i = close + 1
                     continue
                 else:
-                    # Klammern entfernen, Inhalt behalten
+                    # Remove brackets, keep content
                     balanced.append(inner)
                     i = close + 1
                     continue
             else:
-                # Keine schliessende Klammer: weglassen
+                # No closing bracket: skip
                 i += 1
                 continue
         elif s[i] == ')':
-            # Verwaiste schliessende Klammer: weglassen
+            # Orphaned closing bracket: skip
             i += 1
             continue
         else:
@@ -171,15 +171,15 @@ def _sanitize_tel(raw: str) -> str:
             i += 1
     s = ''.join(balanced).strip()
 
-    # Whitespace normalisieren
+    # Normalize whitespace
     s = re.sub(r'\s+', ' ', s).strip()
 
-    # Ziffern zaehlen (E.164: min 7, max 15)
+    # Count digits (E.164: min 7, max 15)
     digits = re.sub(r'\D', '', s)
     if len(digits) < 7 or len(digits) > 15:
         return ""
 
-    # Nur erlaubte Zeichen?
+    # Only allowed characters?
     if not _TEL_VALID_RE.match(s):
         return ""
 
@@ -193,14 +193,14 @@ _EMAIL_VALID_RE = re.compile(
 
 def _sanitize_email(raw: str) -> str:
     """
-    Bereinigt und validiert eine E-Mail-Adresse.
-    Gibt leeren String zurueck wenn ungueltig.
+    Sanitizes and validates an email address.
+    Returns empty string if invalid.
     """
     s = raw.strip().lower()
     if not s:
         return ""
 
-    # Trailing/Leading Muell
+    # Strip trailing/leading junk
     s = s.strip('<>"\' ')
 
     if not _EMAIL_VALID_RE.match(s):
@@ -210,10 +210,10 @@ def _sanitize_email(raw: str) -> str:
 
 
 # ============================================================
-# Laden / Speichern
+# Load / save
 # ============================================================
 def load_contact(email_addr: str) -> dict | None:
-    """Laedt einen Kontakt aus vCard. Gibt None zurueck wenn nicht vorhanden."""
+    """Loads a contact from vCard. Returns None if not found."""
     path = os.path.join(_CONTACTS_DIR, _email_to_filename(email_addr))
     data = read_vcard(path)
     if data is None:
@@ -222,7 +222,7 @@ def load_contact(email_addr: str) -> dict | None:
 
 
 def save_contact(email_addr: str, data: dict) -> None:
-    """Speichert einen Kontakt als vCard (0o600 Permissions). Setzt REV automatisch."""
+    """Saves a contact as vCard (0o600 permissions). Sets REV automatically."""
     _ensure_contacts_dir()
     data["REV"] = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     if not data.get("PRODID"):
@@ -232,16 +232,16 @@ def save_contact(email_addr: str, data: dict) -> None:
 
 
 # ============================================================
-# Regelbasierte Extraktion aus E-Mail-Headern
+# Rule-based extraction from email headers
 # ============================================================
 def extract_from_headers(email_dict: dict) -> dict:
     """
-    Extrahiert Kontakt-Infos regelbasiert aus E-Mail-Headern.
-    Gibt ein partielles vCard-dict zurueck (nur befuellte Felder).
+    Extracts contact info from email headers using rules.
+    Returns a partial vCard dict (only populated fields).
     """
     result = {}
 
-    # FN aus From-Header
+    # FN from From header
     from_raw = (email_dict.get("from") or "").strip()
     fn = _clean_display_name(from_raw)
     if fn:
@@ -250,12 +250,12 @@ def extract_from_headers(email_dict: dict) -> dict:
         if n:
             result["N"] = n
 
-    # EMAIL aus from_addr (mit Validierung)
+    # EMAIL from from_addr (with validation)
     email_addr = _sanitize_email((email_dict.get("from_addr") or ""))
     if email_addr:
         result["EMAIL"] = email_addr
 
-    # TZ aus Date-Header (Timezone-Offset extrahieren)
+    # TZ from Date header (extract timezone offset)
     date_str = (email_dict.get("date") or "").strip()
     if date_str:
         tz_match = re.search(r'([+-]\d{2}:?\d{2})\s*$', date_str)
@@ -269,12 +269,12 @@ def extract_from_headers(email_dict: dict) -> dict:
 
 
 # ============================================================
-# Regelbasierte Extraktion aus Signatur
+# Rule-based extraction from signature
 # ============================================================
 def extract_from_signature(body: str) -> dict:
     """
-    Extrahiert TEL und URL aus dem Signaturbereich (letzte ~15 Zeilen).
-    Gibt ein partielles vCard-dict zurueck.
+    Extracts TEL and URL from the signature area (last ~15 lines).
+    Returns a partial vCard dict.
     """
     result = {}
     if not body:
@@ -284,7 +284,7 @@ def extract_from_signature(body: str) -> dict:
     sig_lines = lines[-15:] if len(lines) > 15 else lines
     sig_text = "\n".join(sig_lines)
 
-    # Telefonnummern (mit Sanitizing)
+    # Phone numbers (with sanitizing)
     tels = []
     for line in sig_lines:
         m = _TEL_LINE_RE.search(line)
@@ -292,7 +292,7 @@ def extract_from_signature(body: str) -> dict:
             tel = _sanitize_tel(m.group(1))
             if tel and tel not in tels:
                 tels.append(tel)
-    # Internationale Nummern ohne Label
+    # International numbers without label
     for m in _TEL_INTL_RE.finditer(sig_text):
         tel = _sanitize_tel(m.group(0))
         if tel and tel not in tels:
@@ -300,7 +300,7 @@ def extract_from_signature(body: str) -> dict:
     if tels:
         result["TEL"] = tels
 
-    # URLs (keine mailto:, keine Tracking)
+    # URLs (no mailto:, no tracking)
     urls = []
     for m in _SIG_URL_RE.finditer(sig_text):
         url = m.group(0).rstrip('.,;)>')
@@ -315,12 +315,12 @@ def extract_from_signature(body: str) -> dict:
 
 
 # ============================================================
-# Prompt-Formatierung
+# Prompt formatting
 # ============================================================
 def format_contact_for_prompt(contact_data: dict | None) -> str:
     """
-    Formatiert ein vCard-Kontakt als Prompt-Fragment.
-    Gibt leeren String zurueck wenn None oder keine nuetzlichen Daten.
+    Formats a vCard contact as a prompt fragment.
+    Returns empty string if None or no useful data.
     """
     if not contact_data:
         return ""
@@ -337,7 +337,7 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
         ident += f" ({email})"
     lines.append(ident)
 
-    # vCard-Felder direkt mappen
+    # Map vCard fields directly
     field_map = [
         ("ORG", "Organization"),
         ("TITLE", "Title"),
@@ -349,7 +349,7 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
         if val and not _is_skip_value(val):
             lines.append(f"{label}: {val}")
 
-    # NOTE: nur LLM-Sektion (vor ---\nUser:) als Kontext
+    # NOTE: only LLM section (before ---\nUser:) as context
     note = (contact_data.get("NOTE") or "").strip()
     if note:
         user_sep = note.find("---\nUser:")
@@ -359,7 +359,7 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
 
     lines.append("--- END SENDER CONTEXT ---")
 
-    # Nur zurueckgeben wenn mehr als Rahmen + Identitaet vorhanden
+    # Only return if more than frame + identity is present
     if len(lines) <= 3:
         return ""
 
@@ -367,7 +367,7 @@ def format_contact_for_prompt(contact_data: dict | None) -> str:
 
 
 # ============================================================
-# Kontakt-Merge
+# Contact merge
 # ============================================================
 _EMPTY_VCARD: dict = {
     "FN": "", "N": {}, "NICKNAME": "", "EMAIL": "",
@@ -381,21 +381,21 @@ _EMPTY_VCARD: dict = {
 def merge_contact(existing: dict | None, header_info: dict,
                   sig_info: dict, llm_info: dict) -> dict:
     """
-    Merged regelbasierte + LLM-extrahierte Infos in einen bestehenden Kontakt.
-    Prioritaet: header_info > sig_info > llm_info (fuer ueberlappende Felder).
-    NOTE: LLM-Sektion wird komplett ersetzt, User-Sektion (---\\nUser:) bleibt erhalten.
+    Merges rule-based + LLM-extracted info into an existing contact.
+    Priority: header_info > sig_info > llm_info (for overlapping fields).
+    NOTE: LLM section is fully replaced, user section (---\\nUser:) is preserved.
     """
     if existing:
         contact = copy.deepcopy(existing)
     else:
         contact = copy.deepcopy(_EMPTY_VCARD)
 
-    # UID beibehalten oder neu generieren
+    # Keep existing UID or generate new one
     if not contact.get("UID"):
         contact["UID"] = str(uuid.uuid4())
 
-    # Felder mergen: LLM zuerst (niedrigste Prio), dann sig, dann header (hoechste)
-    # Einfache String-Felder
+    # Merge fields: LLM first (lowest priority), then sig, then header (highest)
+    # Simple string fields
     simple_fields = ["FN", "ORG", "TITLE", "ROLE", "NICKNAME",
                      "ADR", "URL", "BDAY", "CATEGORIES", "TZ", "GEO"]
     for source in [llm_info, sig_info, header_info]:
@@ -404,7 +404,7 @@ def merge_contact(existing: dict | None, header_info: dict,
             if val and not _is_skip_value(val):
                 contact[key] = val
 
-    # EMAIL: separat mit Validierung
+    # EMAIL: separate handling with validation
     for source in [llm_info, sig_info, header_info]:
         raw_email = (source.get("EMAIL") or "").strip()
         if raw_email:
@@ -412,17 +412,17 @@ def merge_contact(existing: dict | None, header_info: dict,
             if clean:
                 contact["EMAIL"] = clean
 
-    # N-Feld (strukturiert)
+    # N field (structured)
     for source in [llm_info, sig_info, header_info]:
         n = source.get("N")
         if n and isinstance(n, dict) and (n.get("family") or n.get("given")):
             contact["N"] = n
 
-    # TEL: Merge (Listen vereinigen, alle sanitizen)
+    # TEL: merge (union of lists, sanitize all)
     existing_tels = contact.get("TEL") or []
     if isinstance(existing_tels, str):
         existing_tels = [existing_tels] if existing_tels else []
-    # Bestehende TELs re-sanitizen (alte unsaubere Eintraege bereinigen)
+    # Re-sanitize existing TELs (clean up old dirty entries)
     existing_tels = [t for t in (_sanitize_tel(t) for t in existing_tels) if t]
     for source in [sig_info, header_info]:
         new_tels = source.get("TEL") or []
@@ -434,7 +434,7 @@ def merge_contact(existing: dict | None, header_info: dict,
                 existing_tels.append(clean)
     contact["TEL"] = existing_tels
 
-    # NOTE: LLM-Sektion komplett ersetzen, User-Sektion bewahren
+    # NOTE: fully replace LLM section, preserve user section
     new_note = (llm_info.get("NOTE") or "").strip()
     if new_note and not _is_skip_value(new_note):
         user_section = ""
@@ -448,7 +448,7 @@ def merge_contact(existing: dict | None, header_info: dict,
         else:
             contact["NOTE"] = new_note
 
-    # SORT-STRING aus N.family ableiten
+    # Derive SORT-STRING from N.family
     n = contact.get("N")
     if isinstance(n, dict) and n.get("family"):
         contact["SORT-STRING"] = n["family"]
@@ -457,12 +457,12 @@ def merge_contact(existing: dict | None, header_info: dict,
 
 
 # ============================================================
-# LLM-Extraktion + Contact-Card Builder
+# LLM extraction + contact card builder
 # ============================================================
 _BEGIN_RE = re.compile(r"<<\s*BEGIN\s*>>", re.IGNORECASE)
 _END_RE = re.compile(r"<<\s*END\s*>>", re.IGNORECASE)
 
-# Einzeilige Felder im Contact-Block
+# Single-line fields in the contact block
 _CONTACT_LABELS = [
     ("ORG", re.compile(r"(?i)^ORG\s*[:=\-]\s*")),
     ("TITLE", re.compile(r"(?i)^TITLE\s*[:=\-]\s*")),
@@ -470,12 +470,12 @@ _CONTACT_LABELS = [
     ("CATEGORIES", re.compile(r"(?i)^CATEGORIES\s*[:=\-]\s*")),
 ]
 
-# NOTE ist ein mehrzeiliges Feld (letztes vor <<END>>)
+# NOTE is a multiline field (last before <<END>>)
 _NOTE_RE = re.compile(r"(?i)^NOTE\s*[:=\-]\s*")
 
 
 def _extract_response_text(data) -> str:
-    """Extrahiert Response-Text aus Ollama/OpenAI-kompatibler Antwort."""
+    """Extracts response text from Ollama/OpenAI-compatible response."""
     if not isinstance(data, dict):
         return ""
     text = (data.get("response") or "").strip()
@@ -498,8 +498,8 @@ def _extract_response_text(data) -> str:
 
 def _parse_contact_block(text: str) -> dict:
     """
-    Parst einen <<BEGIN>>...<<END>> Block in ein dict.
-    Felder: ORG, TITLE, ROLE, CATEGORIES (einzeilig) + NOTE (mehrzeilig).
+    Parses a <<BEGIN>>...<<END>> block into a dict.
+    Fields: ORG, TITLE, ROLE, CATEGORIES (single-line) + NOTE (multiline).
     """
     begin = _BEGIN_RE.search(text)
     end = _END_RE.search(text)
@@ -555,8 +555,8 @@ def _parse_contact_block(text: str) -> dict:
 
 def _format_emails_for_contact_prompt(emails: list[dict]) -> str:
     """
-    Formatiert gesammelte Mails mit [INCOMING]/[OUTGOING] Labels
-    fuer den Contact-Prompt.
+    Formats collected emails with [INCOMING]/[OUTGOING] labels
+    for the contact prompt.
     """
     parts = []
     for i, e in enumerate(emails, start=1):
@@ -579,18 +579,18 @@ def build_contact_card(model: str, contact_addr: str, person: str,
                        collected_emails: list[dict],
                        existing_contact: dict | None = None) -> dict | None:
     """
-    Baut eine Kontakt-Card aus gesammeltem IMAP-Material.
+    Builds a contact card from collected IMAP material.
 
-    1. Regelbasiert: extract_from_headers + extract_from_signature ueber alle incoming Mails
-    2. LLM-Call: Prompt + formatiertes Material -> NOTE + ORG/TITLE/ROLE/CATEGORIES
-    3. merge_contact() -> fertiges vCard-dict
+    1. Rule-based: extract_from_headers + extract_from_signature over all incoming mails
+    2. LLM call: prompt + formatted material -> NOTE + ORG/TITLE/ROLE/CATEGORIES
+    3. merge_contact() -> finished vCard dict
 
-    Gibt fertiges vCard-dict zurueck oder None bei Fehler.
+    Returns finished vCard dict, or None on error.
     """
     if not collected_emails:
         return None
 
-    # --- Regelbasierte Extraktion ueber alle incoming Mails aggregieren ---
+    # --- Aggregate rule-based extraction over all incoming mails ---
     best_header = {}
     best_sig = {}
     for e in collected_emails:
@@ -611,7 +611,7 @@ def build_contact_card(model: str, contact_addr: str, person: str,
             elif v and k not in best_sig:
                 best_sig[k] = v
 
-    # --- LLM-Call ---
+    # --- LLM call ---
     llm_info = {}
     email_section = _format_emails_for_contact_prompt(collected_emails)
     prompt = contact_prompt_base.replace("{person}", person)
@@ -643,7 +643,7 @@ def build_contact_card(model: str, contact_addr: str, person: str,
         else:
             log.debug("Contact-LLM HTTP %d", resp.status_code)
     except Exception as e:
-        log.debug("Contact-LLM Fehler: %s", e)
+        log.debug("Contact-LLM error: %s", e)
 
     # --- Merge ---
     return merge_contact(existing_contact, best_header, best_sig, llm_info)

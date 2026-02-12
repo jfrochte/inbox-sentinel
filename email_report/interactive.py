@@ -1,24 +1,24 @@
 """
-interactive.py – Alle Benutzer-Prompts und Profil-Auswahl-UI.
+interactive.py -- User prompts and profile selection UI.
 
-Abhaengigkeiten innerhalb des Pakets:
-  - config (Config, list_profiles, load_profile, save_profile, Defaults)
+Dependencies within the package:
+  - config (Config, list_profiles, load_profile, save_profile, defaults)
 
-Dieses Modul buendelt alle interaktiven Eingaben, die der Benutzer beim
-Start des Programms machen muss. Es trennt die UI-Logik von der
-eigentlichen Verarbeitung.
+Bundles all interactive inputs the user needs to provide at startup.
+Separates UI logic from actual processing.
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
+import json
 import os
 from getpass import getpass
 
 import requests
 
 # ============================================================
-# Interne Paket-Imports
+# Internal package imports
 # ============================================================
 from email_report.config import (
     Config,
@@ -39,18 +39,17 @@ from email_report.config import (
     DEFAULT_MAILBOX,
     USE_SENTDATE_SEARCH,
 )
-from email_report.organizations import ORGANIZATIONS, get_organization
 
 
 # ============================================================
-# Hilfsfunktionen: Prompts am Anfang (Enter -> Default)
+# Helper functions: prompts with defaults (Enter -> default)
 # ============================================================
 def prompt_with_default(label: str, default: str, required: bool = False) -> str:
     """
-    Fragt einen String ab.
-    - Return druecken => Default
-    - Leerzeichen werden getrimmt
-    - required=True: bei leerem Default wird wiederholt gefragt bis Eingabe erfolgt
+    Prompts for a string value.
+    - Enter => default
+    - Whitespace is trimmed
+    - required=True: repeats until non-empty input is given
     """
     while True:
         if default:
@@ -65,9 +64,9 @@ def prompt_with_default(label: str, default: str, required: bool = False) -> str
 
 def prompt_int_with_default(label: str, default: int) -> int:
     """
-    Fragt eine Ganzzahl ab.
-    - Return => Default
-    - Bei falscher Eingabe wird wiederholt gefragt.
+    Prompts for an integer.
+    - Enter => default
+    - Repeats on invalid input.
     """
     while True:
         raw = input(f"{label} [{default}]: ").strip()
@@ -80,10 +79,10 @@ def prompt_int_with_default(label: str, default: int) -> int:
 
 def prompt_bool_with_default(label: str, default: bool) -> bool:
     """
-    Boolean Prompt:
+    Boolean prompt:
     - y/yes/1/true/on => True
     - n/no/0/false/off => False
-    - Return => Default
+    - Enter => default
     """
     d = "y" if default else "n"
     raw = input(f"{label} [y/n, Default {d}]: ").strip().lower()
@@ -93,20 +92,18 @@ def prompt_bool_with_default(label: str, default: bool) -> bool:
 
 
 def prompt_secret_with_default(label: str) -> str:
-    # Erst Environment Variable checken
     env_pw = os.environ.get("DEV_EMAIL_PASSWORD", "").strip()
     if env_pw:
         print(f"{label}: (aus Environment Variable)")
         return env_pw
-    # Sonst interaktiv fragen
     return getpass(f"{label} : ")
 
 
 # ============================================================
-# Ollama: Modelle automatisch auflisten (nice UX)
+# Ollama: auto-list available models
 # ============================================================
 def _ollama_tags_url(ollama_url: str) -> str:
-    """Leitet aus einer beliebigen Ollama-URL (z.B. /api/generate oder /api/chat) die /api/tags URL ab."""
+    """Derives the /api/tags URL from any Ollama URL (e.g. /api/generate or /api/chat)."""
     u = (ollama_url or "").strip()
     if not u:
         u = DEFAULT_OLLAMA_URL
@@ -117,7 +114,7 @@ def _ollama_tags_url(ollama_url: str) -> str:
 
 
 def try_fetch_ollama_models(ollama_url: str, timeout_s: float = 4.0) -> list[str]:
-    """Gibt eine Liste der lokal verfuegbaren Modelle zurueck. Bei Fehler: []."""
+    """Returns a list of locally available models. On error: []."""
     tags_url = _ollama_tags_url(ollama_url)
     try:
         r = requests.get(tags_url, timeout=timeout_s)
@@ -136,7 +133,7 @@ def try_fetch_ollama_models(ollama_url: str, timeout_s: float = 4.0) -> list[str
 
 
 def prompt_model_select(default_model: str, ollama_url: str) -> str:
-    """Prompt, der erst versucht, Modelle via /api/tags zu listen. Auswahl per Nummer oder Name."""
+    """Model prompt: tries to list models via /api/tags first. Selection by number or name."""
     models = try_fetch_ollama_models(ollama_url)
     if not models:
         return prompt_with_default("Ollama Modell", default_model)
@@ -164,12 +161,12 @@ def prompt_model_select(default_model: str, ollama_url: str) -> str:
 
 
 # ============================================================
-# Profil-Auswahl beim Start
+# Profile selection at startup
 # ============================================================
 def prompt_load_profile() -> tuple[Config | None, str]:
     """
-    Zeigt verfuegbare Profile an und laesst den Benutzer eines waehlen.
-    Gibt (Config, Profilname) zurueck oder (None, "") wenn kein Profil gewaehlt wurde.
+    Shows available profiles and lets the user choose one.
+    Returns (Config, profile_name) or (None, "") if no profile was selected.
     """
     profiles = list_profiles()
     if not profiles:
@@ -194,7 +191,7 @@ def prompt_load_profile() -> tuple[Config | None, str]:
         print("Ungueltige Nummer. Kein Profil geladen.")
         return None, ""
 
-    # Name direkt eingegeben
+    # Name entered directly
     if raw in profiles:
         cfg = load_profile(raw)
         print(f"Profil '{raw}' geladen.")
@@ -206,8 +203,8 @@ def prompt_load_profile() -> tuple[Config | None, str]:
 
 def prompt_save_profile(cfg: Config, default_name: str = "") -> None:
     """
-    Fragt den Benutzer, ob die aktuelle Konfiguration als Profil gespeichert werden soll.
-    Wenn default_name gesetzt ist, wird er als Vorschlag angeboten.
+    Asks the user whether to save the current configuration as a profile.
+    If default_name is set, it is offered as suggestion.
     """
     if default_name:
         raw = input(f"\nKonfiguration als Profil speichern? (Name) [{default_name}]: ").strip()
@@ -227,14 +224,14 @@ def prompt_save_profile(cfg: Config, default_name: str = "") -> None:
 
 def prompt_all_settings(cfg: Config) -> Config:
     """
-    Fragt alle Einstellungen interaktiv ab, wobei die Werte aus cfg als Defaults dienen.
-    Gibt eine aktualisierte Config zurueck (Passwort wird hier NICHT abgefragt).
+    Prompts for all settings interactively, using values from cfg as defaults.
+    Returns an updated Config (password is NOT prompted here).
     """
     print("\nKonfiguration (Return nimmt jeweils Default):\n")
 
     prompt_file = prompt_with_default("Prompt-Datei", cfg.prompt_file)
 
-    # Server und Ports
+    # Server and ports
     imap_server = prompt_with_default("IMAP Server", cfg.imap_server, required=True)
     imap_port = prompt_int_with_default("IMAP Port", cfg.imap_port)
 
@@ -244,14 +241,14 @@ def prompt_all_settings(cfg: Config) -> Config:
 
     mailbox = prompt_with_default("Mailbox/Folder", cfg.mailbox)
 
-    # Account / Absender
+    # Account / sender
     username = prompt_with_default("Username", cfg.username, required=True)
     from_email = prompt_with_default("From E-Mail", cfg.from_email, required=True)
     recipient_email = prompt_with_default("Recipient E-Mail", cfg.recipient_email, required=True)
     name = prompt_with_default("Name", cfg.name, required=True)
     roles = prompt_with_default("Rollen/Zustaendigkeiten (optional, z.B. 'IT-Leitung, Projektmanager')", cfg.roles)
 
-    # Datumsfenster
+    # Date range
     days_back = prompt_int_with_default("Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
     use_sentdate = prompt_bool_with_default("IMAP Suche ueber SENTDATE (Date: Header)", cfg.use_sentdate)
 
@@ -277,7 +274,6 @@ def prompt_all_settings(cfg: Config) -> Config:
         sent_folder = prompt_with_default(
             "Sent-Ordner fuer Kontakt-Material (z.B. 'Sent', 'Gesendet', leer=nur INBOX)", cfg.sent_folder)
 
-    # Aktualisierte Config zurueckgeben (Passwort und Debug-Felder bleiben unveraendert)
     cfg.prompt_file = prompt_file
     cfg.imap_server = imap_server
     cfg.imap_port = imap_port
@@ -304,10 +300,10 @@ def prompt_all_settings(cfg: Config) -> Config:
 
 
 # ============================================================
-# Profil-Zusammenfassung und Schnellstart (Flow A)
+# Profile summary and quick start (Flow A)
 # ============================================================
 def print_config_summary(cfg: Config) -> None:
-    """Gibt eine kompakte Zusammenfassung der geladenen Config aus."""
+    """Prints a compact summary of the loaded config."""
     print("\n--- Aktuelle Konfiguration ---")
     print(f"  IMAP:       {cfg.imap_server}:{cfg.imap_port}")
     print(f"  SMTP:       {cfg.smtp_server}:{cfg.smtp_port} (SSL: {cfg.smtp_ssl})")
@@ -332,32 +328,52 @@ def print_config_summary(cfg: Config) -> None:
 
 def prompt_confirm_or_edit(cfg: Config) -> tuple[Config, bool]:
     """
-    Zeigt die Config-Zusammenfassung und fragt, ob bearbeitet werden soll.
-    Bei 'n' (Default) wird nur days_back abgefragt.
-    Bei 'y' wird der volle Edit-Dialog gestartet.
-    Gibt (Config, edited) zurueck – edited=True wenn der volle Dialog lief.
+    Shows config summary and asks whether to edit.
+    On 'n' (default): only days_back is prompted.
+    On 'y': full edit dialog runs.
+    Returns (Config, edited) -- edited=True if full dialog was used.
     """
     print_config_summary(cfg)
     edit = prompt_bool_with_default("Einstellungen bearbeiten?", False)
     if edit:
         cfg = prompt_all_settings(cfg)
         return cfg, True
-    # Auch im Schnellstart: Zeitraum ist lauf-spezifisch
+    # Even in quick-start mode: time range is run-specific
     cfg.days_back = prompt_int_with_default(
         "Zeitraum in Tagen zurueck (0=heute, 2=heute+letzte 2 Tage)", cfg.days_back)
     return cfg, False
 
 
 # ============================================================
-# Organisations-Auswahl und User-Settings (Flow B)
+# Organization presets (loaded from JSON data file)
+# ============================================================
+def _load_organizations() -> list[dict]:
+    """Loads organization presets from organizations.json."""
+    json_path = os.path.join(
+        os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        "organizations.json",
+    )
+    try:
+        with open(json_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+# ============================================================
+# Organization selection and user settings (Flow B)
 # ============================================================
 def prompt_organization() -> dict | None:
     """
-    Zeigt die verfuegbaren Organisations-Presets an.
-    Gibt das gewaehlte Preset-Dict zurueck oder None fuer 'Eigener Server'.
+    Shows available organization presets.
+    Returns the selected preset dict, or None for 'Custom server'.
     """
+    orgs = _load_organizations()
+    if not orgs:
+        return None
+
     print("\nOrganisation / E-Mail-Provider waehlen:")
-    for i, org in enumerate(ORGANIZATIONS, 1):
+    for i, org in enumerate(orgs, 1):
         print(f"  {i}) {org['label']}")
     print(f"  0) Eigener Server (alle Felder manuell eingeben)")
 
@@ -367,18 +383,18 @@ def prompt_organization() -> dict | None:
 
     if raw.isdigit():
         idx = int(raw)
-        if 1 <= idx <= len(ORGANIZATIONS):
-            org = ORGANIZATIONS[idx - 1]
+        if 1 <= idx <= len(orgs):
+            org = orgs[idx - 1]
             print(f"Organisation '{org['label']}' gewaehlt.")
             return org
         print("Ungueltige Nummer. Eigener Server gewaehlt.")
         return None
 
-    # Key direkt eingegeben
-    org = get_organization(raw)
-    if org:
-        print(f"Organisation '{org['label']}' gewaehlt.")
-        return org
+    # Key entered directly
+    for org in orgs:
+        if org.get("key") == raw:
+            print(f"Organisation '{org['label']}' gewaehlt.")
+            return org
 
     print(f"Organisation '{raw}' nicht gefunden. Eigener Server gewaehlt.")
     return None
@@ -386,7 +402,7 @@ def prompt_organization() -> dict | None:
 
 def prompt_user_settings(cfg: Config) -> Config:
     """
-    Fragt nur die benutzer-spezifischen Felder ab (Server sind durch Org-Preset gesetzt).
+    Prompts only for user-specific fields (server fields are set by org preset).
     """
     print("\nBenutzer-Einstellungen (Return nimmt jeweils Default):\n")
 

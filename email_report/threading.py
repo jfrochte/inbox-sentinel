@@ -1,17 +1,17 @@
 """
-threading.py – E-Mail-Threading: gruppiert Mails zu Konversationen.
+threading.py -- Email threading: groups emails into conversations.
 
-Blattmodul ohne Paket-Abhaengigkeiten (nur re).
+Leaf module with no package dependencies (only re).
 
-Algorithmus: Union-Find mit zwei Paessen:
-  1) Header-basiert (Message-ID / In-Reply-To / References)
-  2) Subject-Fallback (konservativ, min 8 Zeichen normalisierter Subject)
+Algorithm: Union-Find with two passes:
+  1) Header-based (Message-ID / In-Reply-To / References)
+  2) Subject fallback (conservative, min 8 chars of normalized subject)
 """
 
 import re
 
 # ============================================================
-# Subject-Normalisierung
+# Subject normalization
 # ============================================================
 _PREFIX_RE = re.compile(
     r"^(?:"
@@ -22,7 +22,7 @@ _PREFIX_RE = re.compile(
 
 
 def normalize_subject(subject: str) -> str:
-    """Strippt Reply-/Forward-Prefixe, normalisiert Whitespace, lowercase."""
+    """Strips reply/forward prefixes, normalizes whitespace, lowercase."""
     s = (subject or "").strip()
     changed = True
     while changed:
@@ -64,21 +64,21 @@ class _UnionFind:
 # Threading
 # ============================================================
 def _sort_key(email: dict):
-    """Sortierschluessel: ISO-Datum, dann UID als Fallback."""
+    """Sort key: ISO date, then UID as fallback."""
     return (email.get("date") or "", email.get("uid") or "")
 
 
 def group_into_threads(emails: list[dict]) -> list[list[dict]]:
     """
-    Gruppiert E-Mails in Threads.
+    Groups emails into threads.
 
-    Pass 1: Header-basiert (Message-ID, In-Reply-To, References)
-    Pass 2: Subject-Fallback (nur fuer Mails, die noch keiner
-            Header-Gruppe mit 2+ Mitgliedern angehoeren)
+    Pass 1: header-based (Message-ID, In-Reply-To, References)
+    Pass 2: subject fallback (only for mails not yet in a
+            header group with 2+ members)
 
-    Rueckgabe: Liste von Threads, jeder Thread ist eine chronologisch
-    sortierte Liste von Email-Dicts. Threads untereinander nach
-    aeltestem Datum sortiert.
+    Returns: list of threads, each thread is a chronologically
+    sorted list of email dicts. Threads sorted among each other
+    by oldest date.
     """
     n = len(emails)
     if n == 0:
@@ -93,7 +93,7 @@ def group_into_threads(emails: list[dict]) -> list[list[dict]]:
         if mid:
             mid_to_idx[mid] = i
 
-    # Pass 1: Header-basierte Verknuepfung
+    # Pass 1: header-based linking
     for i, e in enumerate(emails):
         # In-Reply-To
         irt = (e.get("in_reply_to") or "").strip()
@@ -106,7 +106,7 @@ def group_into_threads(emails: list[dict]) -> list[list[dict]]:
             if ref and ref in mid_to_idx:
                 uf.union(i, mid_to_idx[ref])
 
-    # Bestimme, welche Mails in Header-Gruppen mit 2+ Mitgliedern sind
+    # Determine which mails are in header groups with 2+ members
     header_groups: dict[int, list[int]] = {}
     for i in range(n):
         root = uf.find(i)
@@ -117,7 +117,7 @@ def group_into_threads(emails: list[dict]) -> list[list[dict]]:
         if len(members) >= 2:
             in_header_group.update(members)
 
-    # Pass 2: Subject-Fallback (konservativ)
+    # Pass 2: subject fallback (conservative)
     subj_to_idx: dict[str, int] = {}
     for i, e in enumerate(emails):
         if i in in_header_group:
@@ -130,33 +130,33 @@ def group_into_threads(emails: list[dict]) -> list[list[dict]]:
         else:
             subj_to_idx[ns] = i
 
-    # Gruppen sammeln
+    # Collect groups
     groups: dict[int, list[dict]] = {}
     for i in range(n):
         root = uf.find(i)
         groups.setdefault(root, []).append(emails[i])
 
-    # Threads intern chronologisch sortieren
+    # Sort threads internally by chronological order
     threads = []
     for members in groups.values():
         members.sort(key=_sort_key)
         threads.append(members)
 
-    # Threads untereinander nach aeltestem Datum sortieren
+    # Sort threads among each other by oldest date
     threads.sort(key=lambda t: _sort_key(t[0]))
 
     return threads
 
 
 # ============================================================
-# Thread-Formatierung fuer LLM
+# Thread formatting for LLM
 # ============================================================
 def format_thread_for_llm(thread: list[dict]) -> str:
     """
-    Formatiert einen Thread als Text fuer das LLM.
+    Formats a thread as text for the LLM.
 
-    Einzelne Mail: Standard-Format (Subject/From/To/Cc + Body)
-    Thread (2+): Chronologisch mit === Message X of N === Markern
+    Single mail: standard format (Subject/From/To/Cc + Body)
+    Thread (2+): chronological with === Message X of N === markers
     """
     if len(thread) == 1:
         e = thread[0]

@@ -1,45 +1,43 @@
 """
-report.py – HTML-Generierung (Karten + Pre), Sortierung und Block-Parsing.
+report.py -- HTML generation (cards + pre), sorting, and block parsing.
 
-Abhaengigkeiten innerhalb des Pakets:
+Dependencies within the package:
   - utils (write_secure)
 
-Dieses Modul stellt _parse_llm_summary_block bereit, das sowohl hier fuer die
-HTML-Erzeugung als auch in llm.py fuer die Validierung genutzt wird.
-Die Importrichtung ist: llm.py importiert aus report.py (nicht umgekehrt),
-um zirkulaere Imports zu vermeiden.
+Provides _parse_llm_summary_block, used both here for HTML generation
+and in llm.py for validation. Import direction: llm.py imports from
+report.py (not reverse) to avoid circular imports.
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import os
 import re
 import html
 
 # ============================================================
-# Interne Paket-Imports
+# Internal package imports
 # ============================================================
 from email_report.utils import write_secure
 from email_report.config import DEFAULT_SORT_FOLDERS
 
 
 # ============================================================
-# Block-Separator (einmal definiert, ueberall genutzt)
-# Absichtlich kein reiner Strich-Block, damit E-Mail-Inhalte
-# (Signaturen, Weiterleitungs-Marker) ihn nie zufaellig enthalten.
+# Block separator (defined once, used everywhere).
+# Intentionally not a plain dashes block so that email content
+# (signatures, forwarding markers) never accidentally contains it.
 # ============================================================
 BLOCK_SEPARATOR = "====== BLOCK_SEP ======"
 
 
 # ============================================================
-# Prioritaet extrahieren und sortieren
-# (bleibt bewusst tolerant)
+# Priority extraction and sorting (deliberately tolerant)
 # ============================================================
 def extract_priority(text: str) -> int:
     """
-    Tolerant: sucht irgendwo "Priority" und nimmt erste Ziffer.
-    Das ist ok, weil du gesagt hast, es darf etwas "unsauber" sein.
+    Tolerant extraction: looks for "Priority" anywhere and takes the first digit.
+    Deliberately lenient to handle minor LLM output variations.
     """
     for line in (text or "").splitlines():
         if "Priority" in line or "Priorität" in line:
@@ -53,7 +51,7 @@ def extract_priority(text: str) -> int:
 
 def sort_summaries_by_priority(input_filename: str, output_filename: str) -> None:
     """
-    Splittet nach Trenner und sortiert nach Priority aufsteigend.
+    Splits the text by separator and sorts blocks by priority (ascending).
     """
     with open(input_filename, "r", encoding="utf-8") as f:
         content = f.read()
@@ -70,17 +68,17 @@ def sort_summaries_by_priority(input_filename: str, output_filename: str) -> Non
 
 
 # ============================================================
-# LLM-Block Parser
+# LLM block parser
 # ============================================================
 def _parse_llm_summary_block(block: str) -> dict:
     """
-    Parst einen LLM-Block (die Zeilen aus prompt.txt) in ein Dict.
-    Robust gegen fehlende Felder und kleine Abweichungen im LLM-Output.
+    Parses an LLM block (the lines from prompt.txt) into a dict.
+    Robust against missing fields and minor deviations in LLM output.
 
-    Typische Probleme, die wir abfangen:
-    - Mehrere Felder in einer Zeile (z.B. "Sender: ... | Addressing: ... | Asked: NO")
-    - Labels auf Deutsch/Englisch (Betreff/Subject, Von/From/Sender, ...)
-    - Actions/Summary als Abschnitt mit Folgelinien (Bulletpoints oder mehrere Zeilen)
+    Typical issues handled:
+    - Multiple fields on a single line (e.g. "Sender: ... | Addressing: ... | Asked: NO")
+    - Labels in German/English (Betreff/Subject, Von/From/Sender, ...)
+    - Actions/Summary as sections with continuation lines (bullet points or multiple lines)
     """
     out = {
         "subject": "",
@@ -98,12 +96,12 @@ def _parse_llm_summary_block(block: str) -> dict:
         "draft_status": "",
     }
 
-    # "E-Mail Nummer: X" rauswerfen (kommt aus sort_summaries_by_priority)
+    # Strip "E-Mail Nummer: X" lines (inserted by sort_summaries_by_priority)
     lines = [ln.rstrip("\n") for ln in (block or "").splitlines()]
     lines = [ln for ln in lines if not ln.strip().startswith("E-Mail Nummer:")]
 
-    # Label-Synonyme (case-insensitive)
-    sep = r"\s*[:=\-]\s*"  # LLM macht manchmal ':' oder '-' oder '='
+    # Label synonyms (case-insensitive)
+    sep = r"\s*[:=\-]\s*"  # LLM sometimes uses ':' or '-' or '='
 
     label_regexes = [
         ("subject", re.compile(rf"(?i)\b(subject|betreff){sep}")),
@@ -118,7 +116,7 @@ def _parse_llm_summary_block(block: str) -> dict:
         ("draft_status", re.compile(rf"(?i)\b(draft[\s-]?status|draft|entwurf){sep}")),
         ("raw_excerpt", re.compile(rf"(?i)\b(raw\s*excerpt|raw-excerpt|excerpt|auszug){sep}")),
         ("summary", re.compile(rf"(?i)\b(summary|zusammenfassung){sep}")),
-        # Actions for <Person> ist haeufig, aber variabel
+        # "Actions for <Person>" is common but variable
         ("actions", re.compile(rf"(?i)\bactions\s*for\s+[^:=\-]{{1,80}}{sep}")),
         ("actions", re.compile(rf"(?i)\b(actions|action\s*items|todo|to-do|aufgaben){sep}")),
     ]
@@ -147,7 +145,7 @@ def _parse_llm_summary_block(block: str) -> dict:
             return
 
         if key == "asked":
-            # Normalisieren, aber Originalinhalt nicht kaputt machen.
+            # Normalise but do not destroy the original content.
             vv = v.strip().upper()
             if vv in ("YES", "Y", "JA", "J"):
                 out["asked"] = "YES"
@@ -180,14 +178,14 @@ def _parse_llm_summary_block(block: str) -> dict:
 
         out[key] = v
 
-    current_section = None  # "actions" oder "summary" oder "context" oder "raw_excerpt"
+    current_section = None  # "actions" or "summary" or "context" or "raw_excerpt"
 
     for raw in lines:
         line = raw.strip()
         if not line:
             continue
 
-        # Sonderfall: Abschnittsheader ohne klaren "Key: Value" (manche Modelle machen das)
+        # Special case: section headers without a clear "Key: Value" (some models do this)
         if re.match(r"(?i)^actions\b\s*([\-=]\s*)?$", line):
             current_section = "actions"
             continue
@@ -201,7 +199,7 @@ def _parse_llm_summary_block(block: str) -> dict:
             current_section = "raw_excerpt"
             continue
 
-        # Mehrere Felder in einer Zeile: wir suchen alle Label-Starts und schneiden Values.
+        # Multiple fields on one line: find all label starts and extract values.
         hits = []
         for key, rx in label_regexes:
             for m in rx.finditer(line):
@@ -209,10 +207,10 @@ def _parse_llm_summary_block(block: str) -> dict:
 
         if hits:
             hits.sort(key=lambda t: (t[0], -(t[1] - t[0])))
-            # Ueberlappende Matches entfernen (laengster Match an jedem Punkt gewinnt)
+            # Remove overlapping matches (longest match at each position wins)
             dedup = []
             for s, e, k in hits:
-                # Pruefen ob dieser Match innerhalb eines bereits akzeptierten liegt
+                # Check whether this match falls inside an already accepted one
                 overlaps = False
                 for ps, pe, _pk in dedup:
                     if ps <= s < pe:
@@ -226,19 +224,19 @@ def _parse_llm_summary_block(block: str) -> dict:
             for i, (s, e, k) in enumerate(hits):
                 end = hits[i + 1][0] if i + 1 < len(hits) else len(line)
                 val = line[e:end].strip()
-                # Entferne nur aeusserliche Trenner, nicht die innenliegenden.
+                # Strip only outer delimiters, not inner ones.
                 val = val.strip(" |\t")
                 set_value(k, val)
                 current_section = k if k in ("actions", "summary") else None
             continue
 
-        # Standardfall: eine Zeile "Key: Value" oder eine Fortsetzungszeile.
+        # Default case: a "Key: Value" line or a continuation line.
         m = re.match(r"^([^:=\-]{2,60})\s*[:=\-]\s*(.*)$", line)
         if m:
             key_raw = m.group(1).strip()
             val = m.group(2).strip()
 
-            # Key normalisieren
+            # Normalise key
             k = key_raw.lower().strip()
             if k in ("subject", "betreff"):
                 set_value("subject", val)
@@ -283,7 +281,7 @@ def _parse_llm_summary_block(block: str) -> dict:
                 current_section = None
             continue
 
-        # Fortsetzungszeile (typisch: Summary/Actions als Bulletpoints oder zweite Zeile)
+        # Continuation line (typical: Summary/Actions as bullet points or second line)
         if current_section in ("actions", "summary", "context", "raw_excerpt"):
             set_value(current_section, line)
 
@@ -291,7 +289,7 @@ def _parse_llm_summary_block(block: str) -> dict:
 
 
 def _split_actions(actions_raw: str) -> list:
-    """Robustes Splitten von Actions: ';' oder neue Zeilen oder Bulletpoints."""
+    """Robust splitting of actions: ';' or newlines or bullet points."""
     txt = (actions_raw or "").strip()
     if not txt:
         return []
@@ -311,11 +309,11 @@ def _split_actions(actions_raw: str) -> list:
 
 
 # ============================================================
-# HTML Erstellung
+# HTML generation
 # ============================================================
 def summaries_to_html_pre(sorted_text: str) -> str:
     """
-    Escape gegen HTML Injection und Ausgabe im <pre>.
+    Escapes against HTML injection and renders output inside a <pre> block.
     """
     escaped = html.escape(sorted_text)
     escaped = escaped.replace(BLOCK_SEPARATOR, "\n-----------------------\n")
@@ -331,8 +329,8 @@ def summaries_to_html_pre(sorted_text: str) -> str:
 
 def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_triage: bool = False, total_emails: int | None = None, draft_stats: dict | None = None) -> str:
     """
-    Baut eine besser scanbare HTML-Mail (Kartenansicht).
-    Hinweis: Der "Schnellblick" wurde bewusst entfernt.
+    Builds a more scannable HTML email (card view).
+    Note: The "quick glance" section was intentionally removed.
     """
     blocks = [b.strip() for b in (sorted_text or "").split(BLOCK_SEPARATOR) if b.strip()]
     items = [_parse_llm_summary_block(b) for b in blocks]
@@ -347,7 +345,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         return html.escape(x or "")
 
     def esc_ml(x: str) -> str:
-        """Escapen + Zeilenumbrueche in <br> wandeln (fuers Mail-HTML)."""
+        """Escape + convert newlines to <br> (for email HTML)."""
         return esc(x).replace("\n", "<br>")
 
     def prio_badge(priority: int) -> str:
@@ -458,7 +456,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
         parts.append(f"<div style=\"font-size:15px;font-weight:800;color:#111827;\">{subj}</div>")
         parts.append("</div>")
 
-        # Meta-Zeile (bewusst groesser, damit besser lesbar)
+        # Meta line (deliberately larger for better readability)
         parts.append(
             f"<div style=\"margin-top:6px;font-size:14px;line-height:1.4;color:#6b7280;\">"
             f"<b>Sender</b>: {sender}<br>"
@@ -467,7 +465,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
             + f"</div>"
         )
 
-        # Triage-Hinweis: zeigt Zielordner wenn auto_triage aktiv und Kategorie verschoben wird
+        # Triage hint: shows target folder when auto_triage is active and category gets moved
         if auto_triage and cat in DEFAULT_SORT_FOLDERS:
             target_folder = DEFAULT_SORT_FOLDERS[cat]
             parts.append(
@@ -476,7 +474,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
                 f"</div>"
             )
 
-        # Draft-Hinweis
+        # Draft hint
         draft_st = (it.get("draft_status") or "").strip().lower()
         if draft_st == "erstellt":
             parts.append(
@@ -517,8 +515,8 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
 
 def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_triage: bool = False, total_emails: int | None = None, draft_stats: dict | None = None) -> str:
     """
-    Default: Kartenansicht.
-    Fallback: setze ENV EMAIL_REPORT_HTML_PRE=1 fuer den alten <pre>-Output.
+    Default: card view.
+    Fallback: set ENV EMAIL_REPORT_HTML_PRE=1 for the legacy <pre> output.
     """
     use_pre = os.environ.get("EMAIL_REPORT_HTML_PRE", "0").strip().lower() in ("1", "true", "yes", "on")
     if use_pre:

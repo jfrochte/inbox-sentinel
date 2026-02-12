@@ -1,17 +1,17 @@
 """
-config.py – Konfiguration, Defaults und Profilmanagement.
+config.py -- Configuration, defaults, and profile management.
 
-Dieses Modul ist ein Blattmodul ohne interne Paket-Abhaengigkeiten.
-Es definiert die Config-Dataclass mit allen Parametern sowie Funktionen
-zum Speichern, Laden, Auflisten und Loeschen von JSON-Profilen.
+Leaf module with no internal package dependencies.
+Defines the Config dataclass with all parameters, plus functions to
+save, load, list, and delete JSON profiles.
 
-Passwort, debug_keep_files, debug_log und report_dir werden bewusst NICHT
-in Profilen gespeichert – Passwort aus Sicherheitsgruenden, die Debug/Report-
-Felder weil sie umgebungsspezifisch sind.
+Password, debug_keep_files, debug_log, and report_dir are deliberately
+excluded from profiles -- password for security, debug/report fields
+because they are environment-specific.
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import os
 import re
@@ -22,65 +22,61 @@ from dataclasses import dataclass, field, asdict
 # ============================================================
 # Defaults
 # ============================================================
-# IMAP:
 DEFAULT_IMAP_SERVER = ""
 DEFAULT_IMAP_PORT = 993
 
-# SMTP:
 DEFAULT_SMTP_SERVER = ""
 DEFAULT_SMTP_PORT = 587
-DEFAULT_SMTP_SSL = False  # bei 465 typischerweise True
+DEFAULT_SMTP_SSL = False  # typically True for port 465
 
-# Account Defaults
+# Account defaults
 DEFAULT_FROM_EMAIL = ""
 DEFAULT_RECIPIENT_EMAIL = ""
 DEFAULT_USERNAME = ""
 DEFAULT_NAME = ""
 
-# LLM/Ollama Defaults
+# LLM / Ollama defaults
 DEFAULT_MODEL = "gpt-os-20b"
 DEFAULT_OLLAMA_URL = "http://localhost:11434/api/generate"
 
-# Funktions-Defaults
 DEFAULT_MAILBOX = "INBOX"
 SKIP_OWN_SENT_MAILS = True
 
-# Punkt 6: IMAP Datumsfilter
-# - SINCE/BEFORE: serverseitige INTERNALDATE (Zustell-/Ablagezeit)
-# - SENTSINCE/SENTBEFORE: "Date:" Header (Sendedatum) laut RFC-Header
-# Beides kann je nach Server/Zeitzone unterschiedlich wirken.
-# Fuer "ich will die Mails, die an diesem Tag gesendet wurden" ist SENT* oft naeher dran.
+# IMAP date filter:
+# - SINCE/BEFORE: server-side INTERNALDATE (delivery/storage time)
+# - SENTSINCE/SENTBEFORE: "Date:" header (send date per RFC)
+# Both can behave differently depending on server/timezone.
+# For "emails sent on this day", SENT* is usually more accurate.
 USE_SENTDATE_SEARCH = True
 
-# Auto-Triage: Zielordner fuer automatische E-Mail-Einordnung nach Kategorie
+# Auto-triage: target folders for automatic email sorting by category
 DEFAULT_SORT_FOLDERS = {"SPAM": "Spam", "PHISHING": "Quarantine"}
 
-# IMAP-Keyword fuer crash-sichere Auto-Triage (Copy + Tag statt Move)
+# IMAP keyword for crash-safe auto-triage (copy + tag instead of move)
 SENTINEL_KEYWORD = "$Sentinel_Sorted"
 
-# Report Dateien
+# Report files
 REPORT_DIR = "."
 DEBUG_KEEP_FILES = os.environ.get("EMAIL_REPORT_DEBUG", "0").strip().lower() in ("1", "true", "yes", "on")
 DEBUG_LOG = os.environ.get("EMAIL_REPORT_DEBUG_LOG", "0").strip().lower() in ("1", "true", "yes", "on")
-# Wenn Debug-Log aktiv ist, behalten wir Temp-Dateien automatisch (Debugging ohne Datenverlust).
+# When debug log is active, keep temp files automatically (debugging without data loss).
 DEBUG_KEEP_FILES = bool(DEBUG_KEEP_FILES or DEBUG_LOG)
 
 
 # ============================================================
-# Profilverzeichnis – liegt neben dem Paket (nicht innerhalb)
+# Profile directory -- lives next to the package (not inside)
 # ============================================================
 _PROFILES_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "profiles")
 
-# Erlaubte Zeichen fuer Profilnamen: alphanumerisch, Unterstrich, Bindestrich
 _PROFILE_NAME_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
 
 
 # ============================================================
-# Config Dataclass
+# Config dataclass
 # ============================================================
 @dataclass
 class Config:
-    """Alle Parameter, die fuer einen Lauf benoetigt werden."""
+    """All parameters needed for a single run."""
     # Server
     imap_server: str = DEFAULT_IMAP_SERVER
     imap_port: int = DEFAULT_IMAP_PORT
@@ -88,7 +84,7 @@ class Config:
     smtp_port: int = DEFAULT_SMTP_PORT
     smtp_ssl: bool = DEFAULT_SMTP_SSL
 
-    # Organisation (Preset-Key, z.B. "hs-bochum", "gmail", "outlook" oder "")
+    # Organization preset key (e.g. "hs-bochum", "gmail", "outlook", or "")
     organization: str = ""
 
     # Account
@@ -107,39 +103,39 @@ class Config:
     ollama_url: str = DEFAULT_OLLAMA_URL
     model: str = DEFAULT_MODEL
 
-    # Zeitraum
+    # Time range
     days_back: int = 0
 
     # Prompt
     prompt_file: str = "prompt.txt"
 
-    # Auto-Triage: E-Mails nach LLM-Kategorie in IMAP-Unterordner verschieben
+    # Auto-triage: move emails to IMAP subfolders based on LLM category
     auto_triage: bool = True
 
-    # Auto-Draft: Antwortentwuerfe fuer ACTIONABLE Mails per LLM generieren
+    # Auto-draft: generate LLM reply drafts for ACTIONABLE mails
     auto_draft: bool = False
     drafts_folder: str = "Drafts"
-    signature_file: str = ""  # Pfad zu optionaler Signaturdatei fuer Drafts
+    signature_file: str = ""  # path to optional signature file for drafts
 
-    # Auto-Contacts: bei neuen Sendern lazy Kontakt-Card bauen
+    # Auto-contacts: lazily build contact card for new senders
     auto_contacts_lazy: bool = False
-    sent_folder: str = ""  # Zusaetzlicher Ordner fuer Kontakt-Material (z.B. "Sent", "Gesendet")
+    sent_folder: str = ""  # extra folder for contact material (e.g. "Sent")
 
-    # Diese Felder werden NICHT in Profilen gespeichert:
+    # These fields are NOT saved in profiles:
     password: str = ""
     report_dir: str = REPORT_DIR
     debug_keep_files: bool = DEBUG_KEEP_FILES
     debug_log: bool = DEBUG_LOG
 
     # --------------------------------------------------------
-    # Felder, die bei Profil-Export/-Import AUSGESCHLOSSEN werden.
-    # Passwort: Sicherheit. Debug/Report: umgebungsspezifisch.
-    # days_back: lauf-spezifisch, wird jedes Mal neu abgefragt.
+    # Fields excluded from profile export/import.
+    # Password: security. Debug/report: environment-specific.
+    # days_back: run-specific, prompted each time.
     # --------------------------------------------------------
     _EXCLUDED_FROM_PROFILE = frozenset({"password", "debug_keep_files", "debug_log", "report_dir", "days_back"})
 
     def to_profile_dict(self) -> dict:
-        """Gibt ein dict zurueck, das als JSON-Profil gespeichert werden kann."""
+        """Returns a dict suitable for saving as a JSON profile."""
         d = asdict(self)
         for k in self._EXCLUDED_FROM_PROFILE:
             d.pop(k, None)
@@ -147,24 +143,24 @@ class Config:
 
     @classmethod
     def from_profile_dict(cls, d: dict) -> "Config":
-        """Erstellt eine Config aus einem Profil-dict (fehlende Felder = Defaults)."""
-        # Nur bekannte Felder uebernehmen, unbekannte ignorieren
+        """Creates a Config from a profile dict (missing fields = defaults)."""
+        # Only accept known fields, silently ignore unknown ones
         known = {f.name for f in cls.__dataclass_fields__.values()}
         filtered = {k: v for k, v in d.items() if k in known and k not in cls._EXCLUDED_FROM_PROFILE}
         return cls(**filtered)
 
 
 # ============================================================
-# Profil-Management (JSON-Dateien in profiles/)
+# Profile management (JSON files in profiles/)
 # ============================================================
 def _ensure_profiles_dir() -> str:
-    """Erstellt das Profilverzeichnis falls noetig und gibt den Pfad zurueck."""
+    """Creates the profile directory if needed and returns the path."""
     os.makedirs(_PROFILES_DIR, exist_ok=True)
     return _PROFILES_DIR
 
 
 def _validate_profile_name(name: str) -> str:
-    """Prueft und normalisiert den Profilnamen. Wirft ValueError bei ungueltigem Namen."""
+    """Validates and normalizes the profile name. Raises ValueError on invalid names."""
     name = (name or "").strip()
     if not name:
         raise ValueError("Profilname darf nicht leer sein.")
@@ -174,7 +170,7 @@ def _validate_profile_name(name: str) -> str:
 
 
 def list_profiles() -> list[str]:
-    """Gibt eine sortierte Liste der vorhandenen Profilnamen zurueck."""
+    """Returns a sorted list of existing profile names."""
     d = _PROFILES_DIR
     if not os.path.isdir(d):
         return []
@@ -186,7 +182,7 @@ def list_profiles() -> list[str]:
 
 
 def load_profile(name: str) -> Config:
-    """Laedt ein Profil und gibt eine Config zurueck."""
+    """Loads a profile and returns a Config."""
     name = _validate_profile_name(name)
     path = os.path.join(_PROFILES_DIR, f"{name}.json")
     if not os.path.isfile(path):
@@ -197,7 +193,7 @@ def load_profile(name: str) -> Config:
 
 
 def save_profile(name: str, cfg: "Config") -> str:
-    """Speichert ein Profil als JSON. Gibt den Dateipfad zurueck."""
+    """Saves a profile as JSON. Returns the file path."""
     name = _validate_profile_name(name)
     d = _ensure_profiles_dir()
     path = os.path.join(d, f"{name}.json")
@@ -207,7 +203,7 @@ def save_profile(name: str, cfg: "Config") -> str:
 
 
 def delete_profile(name: str) -> bool:
-    """Loescht ein Profil. Gibt True zurueck wenn erfolgreich, False wenn nicht vorhanden."""
+    """Deletes a profile. Returns True on success, False if not found."""
     name = _validate_profile_name(name)
     path = os.path.join(_PROFILES_DIR, f"{name}.json")
     if os.path.isfile(path):

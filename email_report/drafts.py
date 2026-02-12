@@ -1,18 +1,18 @@
 """
-drafts.py – Auto-Draft: LLM-generierte Antwortentwuerfe als IMAP Drafts ablegen.
+drafts.py -- Auto-draft: LLM-generated reply drafts stored as IMAP drafts.
 
-Abhaengigkeiten innerhalb des Pakets:
+Dependencies within the package:
   - threading (format_thread_for_llm, normalize_subject)
   - utils (log)
 
-Drei Funktionen:
-  1) generate_draft_text: LLM-Call fuer Draft-Text
-  2) build_draft_message: RFC-2822-konforme Message bauen
-  3) imap_save_drafts: Drafts per IMAP APPEND speichern
+Three functions:
+  1) generate_draft_text: LLM call for draft text
+  2) build_draft_message: build RFC-2822 compliant message
+  3) imap_save_drafts: save drafts via IMAP APPEND
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import imaplib
 import re
@@ -20,29 +20,29 @@ import email.charset as _charset
 from email.mime.text import MIMEText
 from email.utils import formatdate
 
-# Thunderbird erwartet quoted-printable fuer editierbare Drafts (nicht base64)
+# Thunderbird requires quoted-printable for editable drafts (not base64)
 _QP_UTF8 = _charset.Charset('utf-8')
 _QP_UTF8.body_encoding = _charset.QP
 
 import requests
 
 # ============================================================
-# Interne Paket-Imports
+# Internal package imports
 # ============================================================
 from email_report.utils import log
 from email_report.threading import format_thread_for_llm, normalize_subject
 
 
 # ============================================================
-# 1) Draft-Text per LLM generieren
+# 1) Generate draft text via LLM
 # ============================================================
 def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url: str,
                         draft_prompt_base: str, parsed_analysis: dict, roles: str = "",
                         sender_context: str = "") -> str:
     """
-    Generiert einen Antwort-Entwurf per LLM.
+    Generates a reply draft via LLM.
 
-    Gibt den Draft-Text zurueck, bei Fehler leeren String.
+    Returns the draft text, or empty string on error.
     """
     email_text = format_thread_for_llm(thread)
     newest = thread[-1]
@@ -85,18 +85,18 @@ def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url:
 
         data = resp.json()
 
-        # Extrahiere Text (gleiche Logik wie llm._extract_llm_text_from_json, aber inline)
+        # Extract text (same logic as llm._extract_llm_text_from_json, but inline)
         text = ""
         if isinstance(data, dict):
-            # Ollama /api/generate
+            # Ollama /api/generate format
             text = (data.get("response") or "").strip()
             if not text:
-                # Chat-Format
+                # Chat format
                 msg = data.get("message")
                 if isinstance(msg, dict):
                     text = (msg.get("content") or "").strip()
             if not text:
-                # OpenAI-kompatibel
+                # OpenAI-compatible
                 choices = data.get("choices")
                 if isinstance(choices, list) and choices:
                     ch0 = choices[0]
@@ -110,18 +110,18 @@ def generate_draft_text(model: str, thread: list[dict], person: str, ollama_url:
         return text
 
     except Exception as e:
-        log.warning("Draft-LLM Fehler: %s", e)
+        log.warning("Draft-LLM error: %s", e)
         return ""
 
 
 # ============================================================
-# 2) RFC-2822 Draft-Message bauen
+# 2) Build RFC-2822 draft message
 # ============================================================
 _REPLY_PREFIX_RE = re.compile(r"^(Re|AW|Antwort|Antw|SV|VS|Ref)\s*:\s*", re.IGNORECASE)
 
 
 def _build_full_quote(newest: dict) -> str:
-    """Baut den Full-Quote-Block aus der neuesten Mail im Thread."""
+    """Builds the full-quote block from the newest mail in the thread."""
     original = (newest.get("body_original") or newest.get("body") or "").strip()
     if not original:
         return ""
@@ -134,7 +134,7 @@ def _build_full_quote(newest: dict) -> str:
 
 
 def _load_signature(signature_file: str) -> str:
-    """Laedt eine Signaturdatei. Gibt leeren String zurueck wenn nicht vorhanden."""
+    """Loads a signature file. Returns empty string if not found."""
     if not signature_file:
         return ""
     try:
@@ -147,24 +147,24 @@ def _load_signature(signature_file: str) -> str:
 def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
                         person_name: str, signature_file: str = ""):
     """
-    Baut eine RFC-2822-konforme MIME Message fuer den Drafts-Ordner.
+    Builds an RFC-2822 compliant MIME message for the drafts folder.
     """
     newest = thread[-1]
     subject = (newest.get("subject") or "").strip()
 
-    # Re: Prefix nur hinzufuegen wenn nicht schon vorhanden
+    # Only add Re: prefix if not already present
     if not _REPLY_PREFIX_RE.match(subject):
         subject = f"Re: {subject}"
 
-    # [Sentinel-Entwurf] Prefix: kennzeichnet LLM-generierte Drafts
+    # [Sentinel-Entwurf] prefix: marks LLM-generated drafts
     subject = f"[Sentinel-Entwurf] {subject}"
 
-    # Signatur einfuegen (RFC-konformer Separator: "-- \n")
+    # Insert signature (RFC-compliant separator: "-- \n")
     signature = _load_signature(signature_file)
     if signature:
         draft_body = draft_body + "\n\n-- \n" + signature
 
-    # Full-Quote: Original-Mail unter dem LLM-Entwurf (zwei Leerzeilen Abstand)
+    # Full-quote: original mail below the LLM draft (two blank lines gap)
     full_quote = _build_full_quote(newest)
     full_body = draft_body + "\n\n\n" + full_quote if full_quote else draft_body
 
@@ -174,16 +174,16 @@ def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
     msg["Subject"] = subject
     msg["Date"] = formatdate(localtime=True)
 
-    # Client-spezifische Draft-Header fuer Editierbarkeit
+    # Client-specific draft headers for editability
     msg["X-Mozilla-Draft-Info"] = "internal/draft; vcard=0; receipt=0; DSN=0; uuencode=0; attachmentreminder=0; deliveryformat=4"
     msg["X-Uniform-Type-Identifier"] = "com.apple.mail-draft"
 
-    # In-Reply-To: Message-ID der neuesten Mail
+    # In-Reply-To: Message-ID of the newest mail
     newest_mid = (newest.get("message_id") or "").strip()
     if newest_mid:
         msg["In-Reply-To"] = newest_mid
 
-    # References: Kette aller Message-IDs im Thread
+    # References: chain of all Message-IDs in the thread
     refs = []
     for e in thread:
         mid = (e.get("message_id") or "").strip()
@@ -196,12 +196,12 @@ def build_draft_message(thread: list[dict], draft_body: str, from_email: str,
 
 
 # ============================================================
-# 3) Drafts per IMAP APPEND speichern
+# 3) Save drafts via IMAP APPEND
 # ============================================================
 def _detect_drafts_folder(mail) -> str | None:
-    """Erkennt den \\Drafts Special-Use Ordner via IMAP LIST (RFC 6154).
+    """Detects the \\Drafts special-use folder via IMAP LIST (RFC 6154).
 
-    Gibt den Ordnernamen zurueck oder None wenn nicht erkannt.
+    Returns the folder name, or None if not detected.
     """
     try:
         status, folder_list = mail.list()
@@ -225,14 +225,14 @@ def _detect_drafts_folder(mail) -> str | None:
 def imap_save_drafts(username: str, password: str, imap_server: str, imap_port: int,
                      drafts_folder: str, draft_messages: list) -> dict:
     """
-    Speichert Draft-Messages per IMAP APPEND im Drafts-Ordner.
+    Saves draft messages via IMAP APPEND to the drafts folder.
 
-    Erkennt automatisch den \\Drafts Special-Use Ordner (RFC 6154).
-    Fallback: drafts_folder Parameter.
+    Auto-detects the \\Drafts special-use folder (RFC 6154).
+    Fallback: drafts_folder parameter.
 
-    draft_messages: Liste von (subject_log, Message) Tupeln.
+    draft_messages: list of (subject_log, Message) tuples.
 
-    Gibt {"saved": int, "failed": int, "errors": [...]} zurueck.
+    Returns {"saved": int, "failed": int, "errors": [...]}.
     """
     result = {"saved": 0, "failed": 0, "errors": []}
 
@@ -243,7 +243,7 @@ def imap_save_drafts(username: str, password: str, imap_server: str, imap_port: 
     try:
         mail.login(username, password)
 
-        # Auto-Detect: \Drafts Special-Use Ordner (RFC 6154)
+        # Auto-detect: \Drafts special-use folder (RFC 6154)
         detected = _detect_drafts_folder(mail)
         if detected:
             actual_folder = detected
@@ -252,13 +252,13 @@ def imap_save_drafts(username: str, password: str, imap_server: str, imap_port: 
             actual_folder = drafts_folder
             log.info("Drafts: Kein \\Drafts Ordner erkannt, nutze Fallback: %s",
                      actual_folder)
-            # Fallback-Ordner erstellen falls noetig
+            # Create fallback folder if needed
             try:
                 status_c, _ = mail.create(actual_folder)
                 if status_c == "OK":
                     log.info("IMAP-Ordner erstellt: %s", actual_folder)
             except Exception:
-                pass  # Existiert vermutlich schon
+                pass  # Probably already exists
             try:
                 mail.subscribe(actual_folder)
             except Exception:

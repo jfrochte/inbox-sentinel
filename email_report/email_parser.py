@@ -1,15 +1,15 @@
 """
-email_parser.py – MIME-Parsing, Body-Extraktion und Reply/Forward-Splitting.
+email_parser.py – MIME parsing, body extraction and reply/forward splitting.
 
-Dieses Modul ist ein Blattmodul ohne interne Paket-Abhaengigkeiten.
-Es kuemmert sich um alles, was mit dem Parsen einzelner E-Mail-Nachrichten
-zu tun hat: Header-Dekodierung, HTML-zu-Text-Konvertierung, Trennung von
-neuestem Inhalt und zitierter Historie, sowie die Auswahl des besten
-Body-Textes aus multipart-Mails.
+This module is a leaf module with no internal package dependencies.
+It handles everything related to parsing individual email messages:
+header decoding, HTML-to-text conversion, separation of newest content
+from quoted history, and selection of the best body text from
+multipart messages.
 """
 
 # ============================================================
-# Externe Abhaengigkeiten
+# External dependencies
 # ============================================================
 import re
 import email
@@ -22,12 +22,12 @@ from bs4 import FeatureNotFound
 
 
 # ============================================================
-# Hilfsfunktionen: E-Mail Parsing
+# Helper functions: email parsing
 # ============================================================
 def decode_mime_words(s):
     """
-    Dekodiert MIME-encoded Header wie Subject/From.
-    Robust gegen unbekannte Encodings durch fallback auf utf-8.
+    Decodes MIME-encoded headers such as Subject/From.
+    Robust against unknown encodings by falling back to utf-8.
     """
     if not s:
         return ""
@@ -46,7 +46,7 @@ def decode_mime_words(s):
 
 def get_email_address_from_header(header_value: str) -> str:
     """
-    Extrahiert die reine E-Mail-Adresse aus einem Headerfeld.
+    Extracts the raw email address from a header field.
     """
     _name, addr = parseaddr(header_value or "")
     return (addr or "").strip()
@@ -55,7 +55,7 @@ def get_email_address_from_header(header_value: str) -> str:
 def html_to_text(html_str: str) -> str:
     """
     HTML -> Text (BeautifulSoup).
-    Wir normalisieren Umbrueche und reduzieren sehr viele Leerzeilen.
+    Normalises line breaks and reduces excessive blank lines.
     """
     try:
         soup = BeautifulSoup(html_str, "lxml")
@@ -69,10 +69,10 @@ def html_to_text(html_str: str) -> str:
 
 
 # ============================================================
-# Punkt 4: bessere "neuster Teil vs Historie" Behandlung
+# Newest content vs. quoted history
 # ============================================================
 RE_REPLY_MARKERS = [
-    # typische Outlook/Thunderbird Trenner
+    # typical Outlook/Thunderbird separators
     re.compile(r"^\s*-{2,}\s*Original Message\s*-{2,}\s*$", re.I),
     re.compile(r"^\s*-{2,}\s*Ursprüngliche Nachricht\s*-{2,}\s*$", re.I),
 
@@ -82,26 +82,26 @@ RE_REPLY_MARKERS = [
     # "Am ... schrieb ...:" (DE)
     re.compile(r"^\s*Am .+ schrieb .+:\s*$", re.I),
 
-    # Headerblock in Replies/Forwards (DE/EN)
-    # Wir versuchen hier bewusst nicht jede einzelne Headerzeile zu matchen,
-    # sondern einen "Blockstart" zu erkennen, der oft mit "From:" oder "Von:" beginnt.
+    # Header block in replies/forwards (DE/EN)
+    # We intentionally avoid matching every header line; instead we detect
+    # a block start that typically begins with "From:" or "Von:".
     re.compile(r"^\s*(From|Von)\s*:\s*.+$", re.I),
 ]
 
 
 def split_newest_and_history(text: str):
     """
-    Trennt den "neuesten" Teil einer Mail von der zitierten Historie.
+    Separates the newest part of an email from the quoted history.
 
-    Heuristik:
-    - Wir suchen die erste Zeile, die wie ein Reply/Forward-Marker aussieht.
-    - Alles davor gilt als neuer Teil.
-    - Alles ab Marker gilt als Historie.
+    Heuristic:
+    - Find the first line that looks like a reply/forward marker.
+    - Everything before it is treated as the new part.
+    - Everything from the marker onward is treated as history.
 
-    Vorteil:
-    - LLM sieht oben die aktuelle Nachricht klarer.
-    Nachteil:
-    - Heuristik kann mal zu frueh schneiden, je nach Inhalt.
+    Advantage:
+    - The LLM sees the current message more clearly at the top.
+    Disadvantage:
+    - The heuristic may occasionally cut too early depending on content.
     """
     if not text:
         return "", ""
@@ -110,9 +110,9 @@ def split_newest_and_history(text: str):
     cut_idx = None
 
     for i, line in enumerate(lines):
-        # Wir schneiden erst, wenn:
-        # - ein Marker matcht UND
-        # - wir davor wenigstens ein bisschen Inhalt hatten (verhindert False Positive ganz oben)
+        # Only cut when:
+        # - a marker matches AND
+        # - there was some content before it (prevents false positives at the top)
         if i >= 2:
             for rx in RE_REPLY_MARKERS:
                 if rx.match(line.strip()):
@@ -131,8 +131,8 @@ def split_newest_and_history(text: str):
 
 def quote_history_block(history: str) -> str:
     """
-    Zitiert Historie mit einfachem Prefix "> ".
-    Wichtig: kein "Quote-Level hochzaehlen" mehr (alte Heuristik war oft zu aggressiv).
+    Quotes the history with a simple "> " prefix.
+    Important: no incremental quote-level counting (the old heuristic was too aggressive).
     """
     if not history:
         return ""
@@ -140,15 +140,15 @@ def quote_history_block(history: str) -> str:
 
 
 # ============================================================
-# Punkt 3: bessere Body-Auswahl (nicht einfach "erster Teil")
+# Body selection (not just first part)
 # ============================================================
 def _score_candidate(text: str) -> int:
     """
-    Bewertet einen Textkandidaten fuer "nutzbarer Body".
-    Sehr einfache Scoring-Idee:
-    - viele Nicht-Whitespace Zeichen => gut
-    - sehr hoher Anteil gequoteter Zeilen (>) => eher Historie => schlechter
-    - extrem kurze Texte => schlecht
+    Scores a text candidate for usable body content.
+    Very simple scoring idea:
+    - many non-whitespace characters => good
+    - very high proportion of quoted lines (>) => likely history => worse
+    - extremely short texts => bad
     """
     if not text:
         return 0
@@ -165,10 +165,10 @@ def _score_candidate(text: str) -> int:
     quoted_lines = sum(1 for ln in non_empty_lines if ln.lstrip().startswith(">"))
     quote_ratio = quoted_lines / max(1, len(non_empty_lines))
 
-    # Basis: Anzahl der "sichtbaren" Zeichen
+    # Base: number of visible (non-whitespace) characters
     base = sum(1 for ch in stripped if not ch.isspace())
 
-    # Quote-Anteil bestraft den Score, weil wir den neuen Inhalt bevorzugen wollen
+    # Quote ratio penalises the score because we prefer new content
     penalty = int(base * 0.6 * quote_ratio)
 
     return max(0, base - penalty)
@@ -176,17 +176,17 @@ def _score_candidate(text: str) -> int:
 
 def extract_best_body_text(message: email.message.Message) -> str:
     """
-    Extrahiert einen Body-Text pro Mail, aber robuster:
+    Extracts one body text per email, but more robustly:
 
-    1) Wir sammeln Kandidaten aus allen text/plain und text/html Teilen.
-       - Attachments werden ignoriert (Content-Disposition == attachment)
-       - zusaetzlich ignorieren wir Parts mit Filename (oft "inline attachment")
-    2) HTML Kandidaten werden zu Text konvertiert.
-    3) Wir scoren Kandidaten und nehmen den besten.
-       Das ist besser als "immer den ersten nehmen", weil:
-       - multipart/alternative oft mehrere Varianten hat
-       - einige plain Teile sind nur Stub ("open in browser")
-    4) Danach splitten wir in newest/history und zitieren die Historie sauber.
+    1) Collect candidates from all text/plain and text/html parts.
+       - Attachments are ignored (Content-Disposition == attachment).
+       - Parts with a filename are also ignored (often inline attachments).
+    2) HTML candidates are converted to plain text.
+    3) Candidates are scored and the best one is selected.
+       This is better than always taking the first part because:
+       - multipart/alternative often contains multiple variants
+       - some plain parts are just stubs ("open in browser")
+    4) Afterwards we split into newest/history and quote the history cleanly.
     """
     candidates = []  # List[tuple(score, text, ctype)]
 
@@ -194,8 +194,8 @@ def extract_best_body_text(message: email.message.Message) -> str:
         if not raw_text:
             return
         newest, history = split_newest_and_history(raw_text)
-        # Wir bauen finalen Body so, dass neuer Teil oben steht.
-        # Historie wird zitiert, aber nicht eskalierend.
+        # Build the final body so that the new part appears at the top.
+        # History is quoted but not escalated.
         if history:
             merged = newest + "\n\nQuoted history (trimmed):\n" + quote_history_block(history)
         else:
@@ -204,7 +204,7 @@ def extract_best_body_text(message: email.message.Message) -> str:
         score = _score_candidate(merged)
         candidates.append((score, merged, ctype))
 
-    # Multipart: iteriere ueber alle Parts
+    # Multipart: iterate over all parts
     if message.is_multipart():
         for part in message.walk():
             if part.is_multipart():
@@ -214,12 +214,12 @@ def extract_best_body_text(message: email.message.Message) -> str:
             disp = part.get_content_disposition()  # None, 'inline', 'attachment'
             filename = part.get_filename()
 
-            # Attachments skippen
+            # Skip attachments
             if disp == "attachment":
                 continue
 
-            # Viele Systeme setzen Content-Disposition nicht sauber, aber geben filename mit.
-            # Wenn filename gesetzt ist, ist es sehr oft kein "eigentliches Body-Fragment".
+            # Many systems don't set Content-Disposition properly but include a filename.
+            # If filename is set, it is usually not actual body content.
             if filename:
                 continue
 
@@ -242,7 +242,7 @@ def extract_best_body_text(message: email.message.Message) -> str:
             add_candidate(decoded, ctype)
 
     else:
-        # Singlepart
+        # Single part
         ctype = message.get_content_type()
         if ctype in ("text/plain", "text/html"):
             payload = message.get_payload(decode=True)
@@ -261,19 +261,19 @@ def extract_best_body_text(message: email.message.Message) -> str:
     if not candidates:
         return ""
 
-    # Hoechster Score gewinnt.
-    # Bei Gleichstand ist Reihenfolge egal, wir nehmen einfach max.
+    # Highest score wins.
+    # On a tie the order does not matter; we simply take max.
     best = max(candidates, key=lambda x: x[0])
     return best[1].strip()
 
 
 def extract_raw_body_text(message: email.message.Message) -> str:
     """
-    Extrahiert den vollstaendigen Body-Text einer Mail ohne Split/Score/Quote.
+    Extracts the complete body text of an email without split/score/quote.
 
-    Gleiche MIME-Walk-Logik wie extract_best_body_text (Attachments skippen),
-    aber der Text wird 1:1 zurueckgegeben. Bei mehreren Kandidaten:
-    text/plain bevorzugt, sonst laengster.
+    Uses the same MIME walk logic as extract_best_body_text (skipping
+    attachments), but returns the text as-is. When there are multiple
+    candidates: text/plain is preferred, otherwise the longest wins.
     """
     candidates = []  # List[tuple(ctype, text)]
 
@@ -313,7 +313,7 @@ def extract_raw_body_text(message: email.message.Message) -> str:
     if not candidates:
         return ""
 
-    # text/plain bevorzugen, sonst laengsten nehmen
+    # Prefer text/plain, otherwise take the longest
     plain = [t for ct, t in candidates if ct == "text/plain"]
     if plain:
         return max(plain, key=len).strip()
