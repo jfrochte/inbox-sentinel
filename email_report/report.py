@@ -329,7 +329,7 @@ def summaries_to_html_pre(sorted_text: str) -> str:
     )
 
 
-def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False, total_emails: int | None = None, draft_stats: dict | None = None) -> str:
+def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_triage: bool = False, total_emails: int | None = None, draft_stats: dict | None = None) -> str:
     """
     Baut eine besser scanbare HTML-Mail (Kartenansicht).
     Hinweis: Der "Schnellblick" wurde bewusst entfernt.
@@ -467,8 +467,8 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
             + f"</div>"
         )
 
-        # Sortierhinweis: zeigt Zielordner wenn auto_sort aktiv und Kategorie verschoben wird
-        if auto_sort and cat in DEFAULT_SORT_FOLDERS:
+        # Triage-Hinweis: zeigt Zielordner wenn auto_triage aktiv und Kategorie verschoben wird
+        if auto_triage and cat in DEFAULT_SORT_FOLDERS:
             target_folder = DEFAULT_SORT_FOLDERS[cat]
             parts.append(
                 f"<div style=\"margin-top:4px;font-size:12px;color:#6b7280;font-style:italic;\">"
@@ -515,7 +515,7 @@ def summaries_to_html_cards(sorted_text: str, title: str = "Daily Email Report",
     return "".join(parts)
 
 
-def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_sort: bool = False, total_emails: int | None = None, draft_stats: dict | None = None) -> str:
+def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expected_count=None, auto_triage: bool = False, total_emails: int | None = None, draft_stats: dict | None = None) -> str:
     """
     Default: Kartenansicht.
     Fallback: setze ENV EMAIL_REPORT_HTML_PRE=1 fuer den alten <pre>-Output.
@@ -523,4 +523,4 @@ def summaries_to_html(sorted_text: str, title: str = "Daily Email Report", expec
     use_pre = os.environ.get("EMAIL_REPORT_HTML_PRE", "0").strip().lower() in ("1", "true", "yes", "on")
     if use_pre:
         return summaries_to_html_pre(sorted_text)
-    return summaries_to_html_cards(sorted_text, title=title, expected_count=expected_count, auto_sort=auto_sort, total_emails=total_emails, draft_stats=draft_stats)
+    return summaries_to_html_cards(sorted_text, title=title, expected_count=expected_count, auto_triage=auto_triage, total_emails=total_emails, draft_stats=draft_stats)

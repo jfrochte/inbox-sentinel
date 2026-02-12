@@ -5,7 +5,7 @@ Abhaengigkeiten innerhalb des Pakets:
   - config (Config, Defaults, Debug-Flags)
   - interactive (alle Benutzer-Prompts, Profil-Auswahl)
   - utils (Dateihelfer, Logging, load_prompt_file)
-  - imap_client (E-Mail-Abruf, Auto-Sort)
+  - imap_client (E-Mail-Abruf, Auto-Triage)
   - threading (Thread-Gruppierung per Union-Find)
   - llm (LLM-Analyse, Validierung, Repair)
   - report (Sortierung, HTML-Erzeugung, Block-Parsing)
@@ -293,7 +293,7 @@ def main():
     if tqdm is not None:
         iterator = tqdm(threads, desc="Verarbeite Threads")
 
-    sort_actions = []  # Sammelt {"uid", "folder", "priority", "extra_flags"} fuer Auto-Sort
+    sort_actions = []  # Sammelt {"uid", "folder", "priority", "extra_flags"} fuer Auto-Triage
     draft_queue = []  # Sammelt (subject_log, Message) fuer IMAP APPEND
     draft_stats = {"generated": 0, "skipped": 0, "failed": 0}
 
@@ -361,11 +361,11 @@ def main():
                     dbg['hint'] = 'Server liefert kein Feld "response" (sondern z.B. message/choices). Der Parser liest das jetzt; falls weiterhin leer: resp_text_head pruefen.'
             write_jsonl(debug_file, dbg)
 
-        # parsed_block einmalig berechnen (wird von auto_sort UND auto_draft genutzt)
+        # parsed_block einmalig berechnen (wird von auto_triage UND auto_draft genutzt)
         parsed_block = _parse_llm_summary_block(final_block)
 
-        # --- Auto-Sort: Einheitliche Actions-Liste ---
-        if cfg.auto_sort and thread_uids:
+        # --- Auto-Triage: Einheitliche Actions-Liste ---
+        if cfg.auto_triage and thread_uids:
             cat = (parsed_block.get("category") or "ACTIONABLE").strip().upper()
             prio = 3
             try:
@@ -379,10 +379,10 @@ def main():
                     sort_actions.append({"uid": uid, "folder": DEFAULT_SORT_FOLDERS[cat],
                                          "priority": prio, "extra_flags": ["\\Seen"]})
             elif cat == "FYI":
-                # FYI → in INBOX ersetzen (X-Priority + \Seen)
+                # FYI → in INBOX ersetzen (nur X-Priority, keine Flag-Aenderung)
                 for uid in thread_uids:
                     sort_actions.append({"uid": uid, "folder": cfg.mailbox,
-                                         "priority": prio, "extra_flags": ["\\Seen"]})
+                                         "priority": prio, "extra_flags": []})
             elif cat == "ACTIONABLE" and prio <= 2:
                 # Hohe Prioritaet → in INBOX ersetzen (X-Priority + \Flagged)
                 for uid in thread_uids:
@@ -444,7 +444,7 @@ def main():
         sorted_text = f.read()
 
     subject = f"Daily Email Report ({start_day.isoformat()} bis {end_day.isoformat()})"
-    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(threads), auto_sort=cfg.auto_sort, total_emails=total_emails, draft_stats=draft_stats if cfg.auto_draft else None)
+    html_content = summaries_to_html(sorted_text, title=subject, expected_count=len(threads), auto_triage=cfg.auto_triage, total_emails=total_emails, draft_stats=draft_stats if cfg.auto_draft else None)
 
     # --- Versenden ---
     sent_ok = False
@@ -463,7 +463,7 @@ def main():
         )
         sent_ok = True
     finally:
-        # --- Auto-Draft: Drafts in IMAP speichern (VOR Auto-Sort) ---
+        # --- Auto-Draft: Drafts in IMAP speichern (VOR Auto-Triage) ---
         if sent_ok and cfg.auto_draft and draft_queue:
             log.info("Auto-Draft: %d Entwurf/Entwuerfe zum Speichern.", len(draft_queue))
             try:
@@ -483,9 +483,9 @@ def main():
             except Exception as e:
                 log.warning("Auto-Draft fehlgeschlagen: %s", e)
 
-        # --- Auto-Sort: NACH dem Versand (Report hat Vorrang) ---
-        if sent_ok and cfg.auto_sort and sort_actions:
-            log.info("Auto-Sort: %d E-Mail(s) zu verarbeiten.", len(sort_actions))
+        # --- Auto-Triage: NACH dem Versand (Report hat Vorrang) ---
+        if sent_ok and cfg.auto_triage and sort_actions:
+            log.info("Auto-Triage: %d E-Mail(s) zu verarbeiten.", len(sort_actions))
             try:
                 sort_result = imap_safe_sort(
                     username=cfg.username,
@@ -495,18 +495,18 @@ def main():
                     mailbox=cfg.mailbox,
                     sort_actions=sort_actions,
                 )
-                log.info("Auto-Sort Ergebnis: %d verarbeitet, "
+                log.info("Auto-Triage Ergebnis: %d verarbeitet, "
                          "%d uebersprungen, %d fehlgeschlagen.",
                          sort_result["processed"],
                          sort_result["skipped"], sort_result["failed"])
                 if not sort_result["keywords_supported"]:
-                    log.warning("Auto-Sort: Server unterstuetzt keine Keywords – "
+                    log.warning("Auto-Triage: Server unterstuetzt keine Keywords – "
                                 "Idempotenz nicht moeglich.")
                 if sort_result["errors"]:
                     for err in sort_result["errors"]:
-                        log.warning("Auto-Sort Fehler: %s", err)
+                        log.warning("Auto-Triage Fehler: %s", err)
             except Exception as e:
-                log.warning("Auto-Sort fehlgeschlagen: %s", e)
+                log.warning("Auto-Triage fehlgeschlagen: %s", e)
 
         # Nach erfolgreichem Versand: Dateien loeschen, ausser Debug
         if sent_ok and (not debug_keep):

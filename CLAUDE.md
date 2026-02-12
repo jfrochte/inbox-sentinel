@@ -21,11 +21,11 @@
 - Valid categories: SPAM, PHISHING, FYI, ACTIONABLE (default)
 - SPAM/PHISHING always get Priority 5 and Actions "Keine."
 - Sort folders: SPAM → Spam, PHISHING → Quarantine
-- FYI has no target folder (only `\Seen` flag)
+- FYI has no target folder, no flags changed (only X-Priority via triage)
 
 ## Pipeline Order
-- report send → IMAP save drafts → auto-sort (report has priority)
-- Auto-sort applies to ALL UIDs in a thread (same category)
+- report send → IMAP save drafts → auto-triage (report has priority)
+- Auto-triage applies to ALL UIDs in a thread (same category)
 
 ## IMAP Safety
 - Always use `readonly=True` + `BODY.PEEK[]` — never set Seen flag during fetch

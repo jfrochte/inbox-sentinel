@@ -52,10 +52,10 @@ SKIP_OWN_SENT_MAILS = True
 # Fuer "ich will die Mails, die an diesem Tag gesendet wurden" ist SENT* oft naeher dran.
 USE_SENTDATE_SEARCH = True
 
-# Auto-Sort: Zielordner fuer automatische E-Mail-Sortierung nach Kategorie
+# Auto-Triage: Zielordner fuer automatische E-Mail-Einordnung nach Kategorie
 DEFAULT_SORT_FOLDERS = {"SPAM": "Spam", "PHISHING": "Quarantine"}
 
-# IMAP-Keyword fuer crash-sicheres Auto-Sort (Copy + Tag statt Move)
+# IMAP-Keyword fuer crash-sichere Auto-Triage (Copy + Tag statt Move)
 SENTINEL_KEYWORD = "$Sentinel_Sorted"
 
 # Report Dateien
@@ -113,8 +113,8 @@ class Config:
     # Prompt
     prompt_file: str = "prompt.txt"
 
-    # Auto-Sort: E-Mails nach LLM-Kategorie in IMAP-Unterordner verschieben
-    auto_sort: bool = True
+    # Auto-Triage: E-Mails nach LLM-Kategorie in IMAP-Unterordner verschieben
+    auto_triage: bool = True
 
     # Auto-Draft: Antwortentwuerfe fuer ACTIONABLE Mails per LLM generieren
     auto_draft: bool = False

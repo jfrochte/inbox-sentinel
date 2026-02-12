@@ -259,8 +259,8 @@ def prompt_all_settings(cfg: Config) -> Config:
     ollama_url = prompt_with_default("Ollama URL", os.environ.get("OLLAMA_URL", cfg.ollama_url))
     model = prompt_model_select(cfg.model, ollama_url)
 
-    # Auto-Sort
-    auto_sort = prompt_bool_with_default("Auto-Sort (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_sort)
+    # Auto-Triage
+    auto_triage = prompt_bool_with_default("Auto-Triage (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_triage)
 
     # Auto-Draft
     auto_draft = prompt_bool_with_default(
@@ -294,7 +294,7 @@ def prompt_all_settings(cfg: Config) -> Config:
     cfg.use_sentdate = use_sentdate
     cfg.ollama_url = ollama_url
     cfg.model = model
-    cfg.auto_sort = auto_sort
+    cfg.auto_triage = auto_triage
     cfg.auto_draft = auto_draft
     cfg.drafts_folder = drafts_folder
     cfg.auto_contacts_lazy = auto_contacts_lazy
@@ -322,7 +322,7 @@ def print_config_summary(cfg: Config) -> None:
     print(f"  LLM:        {cfg.model}")
     print(f"  Ollama URL: {cfg.ollama_url}")
     print(f"  Prompt:     {cfg.prompt_file}")
-    print(f"  Auto-Sort:  {cfg.auto_sort}")
+    print(f"  Auto-Triage:{cfg.auto_triage}")
     print(f"  Auto-Draft: {cfg.auto_draft}")
     print(f"  Contacts:   {cfg.auto_contacts_lazy}")
     if cfg.auto_contacts_lazy and cfg.sent_folder:
@@ -403,7 +403,7 @@ def prompt_user_settings(cfg: Config) -> Config:
     cfg.ollama_url = ollama_url
     cfg.model = prompt_model_select(cfg.model, ollama_url)
 
-    cfg.auto_sort = prompt_bool_with_default("Auto-Sort (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_sort)
+    cfg.auto_triage = prompt_bool_with_default("Auto-Triage (X-Priority setzen, Spam/Phishing in Quarantaene)", cfg.auto_triage)
 
     cfg.auto_draft = prompt_bool_with_default(
         "Auto-Draft (Antwortentwuerfe fuer ACTIONABLE Mails)", cfg.auto_draft)

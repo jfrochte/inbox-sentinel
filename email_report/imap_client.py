@@ -10,7 +10,7 @@ Wichtige Aenderung gegenueber der monolithischen Version:
   (SKIP_OWN_SENT_MAILS). Der Wert wird aus config.skip_own_sent uebergeben.
 
 UID-basierter Fetch: Statt Sequenznummern werden UIDs verwendet,
-da diese ueber Sessions hinweg stabil sind (noetig fuer Auto-Sort).
+da diese ueber Sessions hinweg stabil sind (noetig fuer Auto-Triage).
 """
 
 # ============================================================
@@ -317,7 +317,7 @@ def imap_fetch_for_contact(
 
 
 # ============================================================
-# IMAP Auto-Sort: Crash-sichere Nachbearbeitung
+# IMAP Auto-Triage: Crash-sichere Nachbearbeitung
 # ============================================================
 def _check_keyword_support(mail) -> bool:
     """Prueft ob die Mailbox benutzerdefinierte Keywords (Flags) unterstuetzt.
@@ -588,7 +588,7 @@ def imap_safe_sort(username: str, password: str, imap_server: str, imap_port: in
 
     except Exception as e:
         result["errors"].append(f"IMAP-Verbindungsfehler: {e}")
-        log.warning("IMAP Auto-Sort Verbindungsfehler: %s", e)
+        log.warning("IMAP Auto-Triage Verbindungsfehler: %s", e)
     finally:
         try:
             mail.logout()
