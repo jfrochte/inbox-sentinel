@@ -109,26 +109,26 @@ function del() {
     <div class="section-title">{{ t('profile.sectionAccount') }}</div>
     <div class="form-row">
       <div class="form-group">
-        <label>{{ t('profile.username') }}</label>
+        <label>{{ t('profile.username') }} <span class="info-badge" :title="t('profile.usernameHint')">i</span></label>
         <input v-model="form.username" />
       </div>
       <div class="form-group">
-        <label>{{ t('profile.fromEmail') }}</label>
+        <label>{{ t('profile.fromEmail') }} <span class="info-badge" :title="t('profile.fromEmailHint')">i</span></label>
         <input v-model="form.from_email" type="email" />
       </div>
     </div>
     <div class="form-row">
       <div class="form-group">
-        <label>{{ t('profile.recipientEmail') }}</label>
+        <label>{{ t('profile.recipientEmail') }} <span class="info-badge" :title="t('profile.recipientEmailHint')">i</span></label>
         <input v-model="form.recipient_email" type="email" />
       </div>
       <div class="form-group">
-        <label>{{ t('profile.displayName') }}</label>
+        <label>{{ t('profile.displayName') }} <span class="info-badge" :title="t('profile.displayNameHint')">i</span></label>
         <input v-model="form.name" />
       </div>
     </div>
     <div class="form-group">
-      <label>{{ t('profile.roles') }}</label>
+      <label>{{ t('profile.roles') }} <span class="info-badge" :title="t('profile.rolesHint')">i</span></label>
       <input v-model="form.roles" />
     </div>
 
