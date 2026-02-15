@@ -11,7 +11,7 @@ contacts/*.vcf
 
 # Frontend build artifacts
 gui/frontend/node_modules/
-gui/frontend/dist/
+# gui/frontend/dist/ is committed so Windows users don't need Node.js
 
 # Report temp files (may contain email content)
 zusammenfassung_*.txt
