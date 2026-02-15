@@ -15,7 +15,7 @@ async function testLlm() {
   const p = profileStore.activeProfile
   testing.value = true
   try {
-    appStore.healthLlm = await api.checkLlm(p.ollama_url)
+    appStore.healthLlm = await api.checkLlm(p.ollama_url, p.model)
   } catch (e: any) {
     appStore.healthLlm = { ok: false, message: e.message, latency_ms: 0 }
   }

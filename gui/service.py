@@ -92,17 +92,23 @@ def check_smtp(server: str, port: int, username: str, password: str, ssl: bool) 
         return {"ok": False, "message": str(e), "latency_ms": ms}
 
 
-def check_llm(ollama_url: str) -> dict:
-    """Tests LLM/Ollama reachability. Returns {ok, message, latency_ms}."""
+def check_llm(ollama_url: str, model: str = "") -> dict:
+    """Tests LLM/Ollama reachability and model availability. Returns {ok, message, latency_ms}."""
     base_url = ollama_url.rsplit("/api/", 1)[0] if "/api/" in ollama_url else ollama_url.rstrip("/")
     tags_url = f"{base_url}/api/tags"
     t0 = time.time()
     try:
         resp = requests.get(tags_url, timeout=10)
         ms = int((time.time() - t0) * 1000)
-        if resp.status_code == 200:
+        if resp.status_code != 200:
+            return {"ok": False, "message": f"HTTP {resp.status_code}", "latency_ms": ms}
+        if not model:
             return {"ok": True, "message": "OK", "latency_ms": ms}
-        return {"ok": False, "message": f"HTTP {resp.status_code}", "latency_ms": ms}
+        available = [m["name"] for m in resp.json().get("models", [])]
+        # Match with and without :latest tag
+        if model in available or f"{model}:latest" in available:
+            return {"ok": True, "message": "OK", "latency_ms": ms}
+        return {"ok": False, "message": f"Model '{model}' not found", "latency_ms": ms}
     except Exception as e:
         ms = int((time.time() - t0) * 1000)
         return {"ok": False, "message": str(e), "latency_ms": ms}

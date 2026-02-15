@@ -97,6 +97,7 @@ class SmtpCheckRequest(BaseModel):
 
 class LlmCheckRequest(BaseModel):
     ollama_url: str = "http://localhost:11434/api/generate"
+    model: str = ""
 
 
 class HealthCheckResponse(BaseModel):

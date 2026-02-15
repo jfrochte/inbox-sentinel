@@ -54,8 +54,8 @@ export const checkImap = (server: string, port: number, username: string, passwo
   request<HealthCheckResult>('POST', '/health/imap', { server, port, username, password })
 export const checkSmtp = (server: string, port: number, username: string, password: string, ssl: boolean) =>
   request<HealthCheckResult>('POST', '/health/smtp', { server, port, username, password, ssl })
-export const checkLlm = (ollama_url: string) =>
-  request<HealthCheckResult>('POST', '/health/llm', { ollama_url })
+export const checkLlm = (ollama_url: string, model: string) =>
+  request<HealthCheckResult>('POST', '/health/llm', { ollama_url, model })
 
 // Contacts
 export const getContacts = () => request<ContactSummary[]>('GET', '/contacts')

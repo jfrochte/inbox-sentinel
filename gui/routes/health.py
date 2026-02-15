@@ -20,4 +20,4 @@ def test_smtp(req: SmtpCheckRequest):
 
 @router.post("/llm", response_model=HealthCheckResponse)
 def test_llm(req: LlmCheckRequest):
-    return check_llm(req.ollama_url)
+    return check_llm(req.ollama_url, req.model)
