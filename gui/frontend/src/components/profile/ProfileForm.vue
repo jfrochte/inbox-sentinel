@@ -135,7 +135,7 @@ function del() {
     <!-- Mailbox section -->
     <div class="section-title">{{ t('profile.sectionMailbox') }}</div>
     <div class="form-group">
-      <label>{{ t('profile.mailbox') }}</label>
+      <label>{{ t('profile.mailbox') }} <span class="info-badge" :title="t('profile.mailboxHint')">i</span></label>
       <input v-model="form.mailbox" />
     </div>
     <div class="checkbox-group">
@@ -176,21 +176,27 @@ function del() {
     <div class="section-title">{{ t('profile.sectionFeatures') }}</div>
     <div class="checkbox-group">
       <input type="checkbox" id="auto_triage" v-model="form.auto_triage" />
-      <label for="auto_triage">{{ t('profile.autoTriage') }}</label>
+      <label for="auto_triage">
+        {{ t('profile.autoTriage') }}
+        <span class="info-badge" :title="t('profile.autoTriageHint')">i</span>
+      </label>
     </div>
 
     <!-- Auto-Draft sub-section -->
     <div class="checkbox-group">
       <input type="checkbox" id="auto_draft" v-model="form.auto_draft" />
-      <label for="auto_draft">{{ t('profile.autoDraft') }}</label>
+      <label for="auto_draft">
+        {{ t('profile.autoDraft') }}
+        <span class="info-badge" :title="t('profile.autoDraftHint')">i</span>
+      </label>
     </div>
     <div v-if="form.auto_draft" class="form-row" style="margin-left: 26px;">
       <div class="form-group">
-        <label>{{ t('profile.draftsFolder') }}</label>
+        <label>{{ t('profile.draftsFolder') }} <span class="info-badge" :title="t('profile.draftsFolderHint')">i</span></label>
         <input v-model="form.drafts_folder" />
       </div>
       <div class="form-group">
-        <label>{{ t('profile.signatureFile') }}</label>
+        <label>{{ t('profile.signatureFile') }} <span class="info-badge" :title="t('profile.signatureFileHint')">i</span></label>
         <input v-model="form.signature_file" />
       </div>
     </div>
@@ -198,10 +204,13 @@ function del() {
     <!-- Auto-Contacts sub-section -->
     <div class="checkbox-group">
       <input type="checkbox" id="auto_contacts" v-model="form.auto_contacts_lazy" />
-      <label for="auto_contacts">{{ t('profile.autoContactsLazy') }}</label>
+      <label for="auto_contacts">
+        {{ t('profile.autoContactsLazy') }}
+        <span class="info-badge" :title="t('profile.autoContactsLazyHint')">i</span>
+      </label>
     </div>
     <div v-if="form.auto_contacts_lazy" class="form-group" style="margin-left: 26px;">
-      <label>{{ t('profile.sentFolder') }}</label>
+      <label>{{ t('profile.sentFolder') }} <span class="info-badge" :title="t('profile.sentFolderHint')">i</span></label>
       <input v-model="form.sent_folder" />
     </div>
 
